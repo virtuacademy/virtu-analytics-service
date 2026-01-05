@@ -1,8 +1,11 @@
+import { unstable_noStore as noStore } from "next/cache";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export default async function Home() {
+  noStore();
   const appointments = await prisma.appointment.findMany({
     orderBy: { updatedAt: "desc" },
     take: 25
