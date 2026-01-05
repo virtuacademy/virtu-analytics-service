@@ -49,6 +49,10 @@ Queue worker:
 Debug:
 - `POST /api/graphql` - Apollo GraphQL endpoint to inspect attribution and deliveries.
 
+Dashboard:
+- `GET /` - dashboard UI (requires login if `AUTH_PASSWORD` is set)
+- `GET /login` - login screen that sets the auth cookie
+
 ## Environment variables
 
 See `.env.example` for the full list. Key values:
@@ -56,10 +60,12 @@ See `.env.example` for the full list. Key values:
 - `PUBLIC_BASE_URL` - e.g. `https://analytics.virtu.academy`
 - `ALLOWED_ORIGINS` - comma-separated Webflow origins
 - `COOKIE_DOMAIN` - `.virtu.academy`
-- Acuity: `ACUITY_USER_ID`, `ACUITY_API_KEY`, field ids, trial appointment type id
+- Acuity: `ACUITY_USER_ID`, `ACUITY_API_KEY`, field ids, trial appointment type id, `ACUITY_WEBHOOK_FORWARD_URL` (optional)
 - QStash: `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`
 - Meta: `META_PIXEL_ID`, `META_CAPI_ACCESS_TOKEN`
 - HubSpot: `HUBSPOT_PORTAL_ID`, `HUBSPOT_TRIAL_FORM_GUID`, `HUBSPOT_PRIVATE_APP_TOKEN`
+- Optional: `OUTBOUND_MODE=mock` (skip outbound calls and mark deliveries as success)
+- Optional: `AUTH_PASSWORD` (protects the dashboard; login at `/login`)
 
 ## Webflow setup (site-wide)
 
@@ -196,6 +202,8 @@ Notes:
 - `ACUITY_TRIAL_APPOINTMENT_TYPE_IDS` (comma-separated)
 
 ## Delivery behavior (Meta, Google Ads, TikTok, HubSpot)
+
+If `OUTBOUND_MODE=mock`, Meta and HubSpot deliveries are marked success without external calls.
 
 Meta CAPI:
 - `event_id` is the Acuity appointment id for dedupe with Pixel.

@@ -1,76 +1,76 @@
-//TODO: Update back to https://react-node-appva.herokuapp.com/hook-catch after
-//TODO: Security check/password protect homepage
-//TODO: Cleanup view
 //TODO: Make clear readme.md, claude, and agent
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { sha256Base64, sha256Hex } from "@/lib/crypto";
-import type { AcuityAppointment } from "@/lib/acuity";
 import { fetchAppointmentById, appointmentSnapshot, extractIntakeValue } from "@/lib/acuity";
 import { enqueueDelivery } from "@/lib/qstash";
 
 export const runtime = "nodejs";
 
-type DevPayload = {
-  [key: string]: unknown;
-  action?: string;
-  id?: string | number;
-  appointmentTypeID?: string | number;
-  calendarID?: string | number;
-  appointment?: Record<string, unknown>;
-  vaAttrib?: string | null;
-  gclid?: string | null;
-  ttclid?: string | null;
-  fbp?: string | null;
-  fbc?: string | null;
-};
+async function forwardLegacyWebhook(opts: {
+  url: string;
+  raw: string;
+  contentType: string;
+  signature?: string;
+}) {
+  const headers: Record<string, string> = { "content-type": opts.contentType };
+  if (opts.signature) headers["x-acuity-signature"] = opts.signature;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetch(opts.url, {
+      method: "POST",
+      headers,
+      body: opts.raw,
+      signal: controller.signal
+    });
+    if (!res.ok) {
+      console.warn("Legacy webhook forward failed", {
+        status: res.status,
+        statusText: res.statusText
+      });
+    }
+  } catch (err) {
+    console.warn("Legacy webhook forward error", err);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 export async function POST(req: NextRequest) {
-  const devBypass =
-    process.env.ACUITY_WEBHOOK_DEV_BYPASS === "1" && req.headers.get("x-acuity-dev") === "1";
   const secret = process.env.ACUITY_API_KEY;
-  if (!devBypass && !secret) {
+  if (!secret) {
     return NextResponse.json({ ok: false, error: "Missing ACUITY_API_KEY" }, { status: 500 });
   }
 
   const sig = req.headers.get("x-acuity-signature") ?? "";
   const raw = await req.text();
+  const contentType = req.headers.get("content-type") ?? "application/x-www-form-urlencoded";
 
-  if (!devBypass) {
-    const expected = sha256Base64(raw, secret as string);
-    if (!sig || sig !== expected) {
-      return NextResponse.json({ ok: false, error: "Invalid signature" }, { status: 401 });
-    }
+  const expected = sha256Base64(raw, secret as string);
+  if (!sig || sig !== expected) {
+    return NextResponse.json({ ok: false, error: "Invalid signature" }, { status: 401 });
   }
 
   const bodyHash = sha256Hex(raw);
-  let action = "unknown";
-  let externalId = "";
-  let appointmentTypeID: string | null = null;
-  let calendarID: string | null = null;
-  let devPayload: DevPayload | null = null;
-
-  if (devBypass) {
-    try {
-      devPayload = JSON.parse(raw) as DevPayload;
-    } catch {
-      return NextResponse.json({ ok: false, error: "Invalid JSON" }, { status: 400 });
-    }
-    action = String(devPayload?.action ?? "unknown");
-    externalId = String(devPayload?.id ?? "");
-    appointmentTypeID = devPayload?.appointmentTypeID
-      ? String(devPayload?.appointmentTypeID)
-      : null;
-    calendarID = devPayload?.calendarID ? String(devPayload?.calendarID) : null;
-  } else {
-    const form = new URLSearchParams(raw);
-    action = form.get("action") ?? "unknown";
-    externalId = form.get("id") ?? "";
-    appointmentTypeID = form.get("appointmentTypeID");
-    calendarID = form.get("calendarID");
-  }
+  const form = new URLSearchParams(raw);
+  const action = form.get("action") ?? "unknown";
+  const externalId = form.get("id") ?? "";
+  const appointmentTypeID = form.get("appointmentTypeID");
+  const calendarID = form.get("calendarID");
 
   if (!externalId) return NextResponse.json({ ok: false, error: "Missing id" }, { status: 400 });
+
+  const legacyUrl = process.env.ACUITY_WEBHOOK_FORWARD_URL;
+  if (legacyUrl) {
+    await forwardLegacyWebhook({
+      url: legacyUrl,
+      raw,
+      contentType,
+      signature: sig || undefined
+    });
+  }
 
   try {
     await prisma.inboundWebhook.create({
@@ -86,14 +86,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, deduped: true });
   }
 
-  const appt = devBypass
-    ? ({
-        id: Number(externalId),
-        appointmentTypeID: appointmentTypeID ? Number(appointmentTypeID) : undefined,
-        calendarID: calendarID ? Number(calendarID) : undefined,
-        ...(devPayload?.appointment ?? devPayload)
-      } as AcuityAppointment)
-    : await fetchAppointmentById(externalId);
+  const appt = await fetchAppointmentById(externalId);
 
   const VA_ATTRIB_FIELD_ID = Number(process.env.ACUITY_FIELD_VA_ATTRIB_ID || "0") || null;
   const GCLID_FIELD_ID = Number(process.env.ACUITY_FIELD_GCLID_ID || "0") || null;
@@ -101,13 +94,11 @@ export async function POST(req: NextRequest) {
   const FBP_FIELD_ID = Number(process.env.ACUITY_FIELD_FBP_ID || "0") || null;
   const FBC_FIELD_ID = Number(process.env.ACUITY_FIELD_FBC_ID || "0") || null;
 
-  const vaAttrib =
-    devPayload?.vaAttrib ?? (VA_ATTRIB_FIELD_ID ? extractIntakeValue(appt, VA_ATTRIB_FIELD_ID) : null);
-  const gclid = devPayload?.gclid ?? (GCLID_FIELD_ID ? extractIntakeValue(appt, GCLID_FIELD_ID) : null);
-  const ttclid =
-    devPayload?.ttclid ?? (TTCLID_FIELD_ID ? extractIntakeValue(appt, TTCLID_FIELD_ID) : null);
-  const fbp = devPayload?.fbp ?? (FBP_FIELD_ID ? extractIntakeValue(appt, FBP_FIELD_ID) : null);
-  const fbc = devPayload?.fbc ?? (FBC_FIELD_ID ? extractIntakeValue(appt, FBC_FIELD_ID) : null);
+  const vaAttrib = VA_ATTRIB_FIELD_ID ? extractIntakeValue(appt, VA_ATTRIB_FIELD_ID) : null;
+  const gclid = GCLID_FIELD_ID ? extractIntakeValue(appt, GCLID_FIELD_ID) : null;
+  const ttclid = TTCLID_FIELD_ID ? extractIntakeValue(appt, TTCLID_FIELD_ID) : null;
+  const fbp = FBP_FIELD_ID ? extractIntakeValue(appt, FBP_FIELD_ID) : null;
+  const fbc = FBC_FIELD_ID ? extractIntakeValue(appt, FBC_FIELD_ID) : null;
 
   const snap = appointmentSnapshot(appt);
 

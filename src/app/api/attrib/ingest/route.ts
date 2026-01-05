@@ -176,7 +176,6 @@ export async function POST(req: NextRequest) {
     attribTok,
     cookieDomain: COOKIE_DOMAIN
   });
-  console.log("Attribution response:", { vid, sid, attribTok, cookieDomain: COOKIE_DOMAIN });
   setCookie(res, "va_vid", vid, 60 * 60 * 24 * 90);
   setCookie(res, "va_sid", sid, 60 * 60 * 24 * 30);
   setReadableCookie(res, "va_attrib", attribTok, 60 * 60 * 24 * 90);
