@@ -11,6 +11,11 @@ export type AcuityAppointment = {
   email?: string;
   phone?: string;
   fields?: Array<{ id: number; name?: string; value?: string }>;
+  forms?: Array<{
+    id: number;
+    name?: string;
+    values?: Array<{ fieldID: number; name?: string; value?: string }>;
+  }>;
 };
 
 function basicAuthHeader(userId: string, apiKey: string) {
@@ -41,7 +46,13 @@ export async function fetchAppointmentById(appointmentId: string): Promise<Acuit
 export function extractIntakeValue(appt: AcuityAppointment, fieldId: number): string | null {
   const f = appt.fields?.find(x => x.id === fieldId);
   const v = f?.value?.trim();
-  return v ? v : null;
+  if (v) return v;
+
+  const formValue = appt.forms
+    ?.flatMap(form => form.values ?? [])
+    .find(value => Number(value.fieldID) === fieldId);
+  const formTrimmed = formValue?.value?.trim();
+  return formTrimmed ? formTrimmed : null;
 }
 
 export function appointmentSnapshot(appt: AcuityAppointment) {
