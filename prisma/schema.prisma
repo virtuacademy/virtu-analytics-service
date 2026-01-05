@@ -59,6 +59,8 @@ model Attribution {
   lastUrl        String?
   firstReferrer  String?
   lastReferrer   String?
+  ipAddress      String?
+  userAgent      String?
 
   utmSource      String?
   utmMedium      String?

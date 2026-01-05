@@ -23,6 +23,8 @@ type Attribution = {
   lastTouchAt: Date;
   lastUrl: string | null;
   lastReferrer: string | null;
+  ipAddress: string | null;
+  userAgent: string | null;
   utmSource: string | null;
   utmMedium: string | null;
   utmCampaign: string | null;
@@ -280,6 +282,22 @@ export function AppointmentModal({
                       </dt>
                       <dd className="break-all text-zinc-300 text-[11px]">
                         {attribution.lastReferrer ?? "-"}
+                      </dd>
+                    </div>
+                    <div className="space-y-1">
+                      <dt className="text-zinc-500 text-[10px] uppercase tracking-wider font-medium">
+                        IP Address
+                      </dt>
+                      <dd className="font-mono text-[11px] text-zinc-400">
+                        {attribution.ipAddress ?? "-"}
+                      </dd>
+                    </div>
+                    <div className="space-y-1 col-span-2">
+                      <dt className="text-zinc-500 text-[10px] uppercase tracking-wider font-medium">
+                        User Agent
+                      </dt>
+                      <dd className="break-all text-zinc-300 text-[11px]">
+                        {attribution.userAgent ?? "-"}
                       </dd>
                     </div>
                     <div className="space-y-1 col-span-2">
