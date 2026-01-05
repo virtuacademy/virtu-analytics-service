@@ -1,10 +1,16 @@
 import { unstable_noStore as noStore } from "next/cache";
 import { prisma } from "@/lib/prisma";
+import { AppointmentModal } from "./components/AppointmentModal";
+import { CollapsibleAttributions } from "./components/CollapsibleAttributions";
+import { CollapsibleCanonicalEvents } from "./components/CollapsibleCanonicalEvents";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const TRIAL_APPOINTMENT_TYPES = ["37436265", "37436299"];
+const TRIAL_APPOINTMENT_TYPES = (process.env.ACUITY_TRIAL_APPOINTMENT_TYPE_IDS ?? "")
+  .split(",")
+  .map(id => id.trim())
+  .filter(Boolean);
 
 type SearchParams = {
   trial?: string;
@@ -61,286 +67,125 @@ export default async function Home({
   });
 
   return (
-    <main className="min-h-screen bg-zinc-950 text-zinc-100">
-      <div className="mx-auto max-w-6xl px-6 py-12">
-        <header className="flex flex-col gap-2">
-          <h1 className="text-3xl font-semibold">Virtu Analytics Debug</h1>
-          <p className="text-sm text-zinc-400">
-            Recent appointments, canonical events, and delivery results.
+    <main className="min-h-screen bg-gradient-to-br from-zinc-950 via-zinc-900 to-zinc-950 text-zinc-100">
+      <div className="mx-auto max-w-7xl px-6 py-12">
+        <header className="relative mb-12 flex flex-col gap-3">
+          <div className="absolute -left-4 top-0 h-16 w-1 bg-gradient-to-b from-blue-500 to-purple-500 rounded-full" />
+          <h1 className="text-4xl font-bold tracking-tight bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
+            Virtu Analytics
+          </h1>
+          <p className="text-sm text-zinc-400 max-w-2xl">
+            Real-time insights into appointments, attribution tracking, and event delivery across all platforms.
           </p>
         </header>
 
-        {selectedAppointmentId ? (
-          <section id="selected-appointment" className="mt-10">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-lg font-medium">Selected Appointment</h2>
-              <a className="text-xs text-zinc-400 hover:text-zinc-200" href={clearHref}>
-                Clear selection
-              </a>
-            </div>
-            {selectedAppointment ? (
-              <div className="mt-3 grid gap-4 md:grid-cols-2">
-                <div className="rounded-xl border border-zinc-800 p-4">
-                  <h3 className="text-sm font-medium text-zinc-200">Appointment</h3>
-                  <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                    <div>
-                      <dt className="text-zinc-500">ID</dt>
-                      <dd className="font-mono text-[11px]">{selectedAppointment.id}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-zinc-500">Type</dt>
-                      <dd>{selectedAppointment.appointmentTypeId ?? "-"}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-zinc-500">Scheduled By</dt>
-                      <dd>{selectedAppointment.scheduledBy ?? "-"}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-zinc-500">Status</dt>
-                      <dd>{selectedAppointment.status ?? "-"}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-zinc-500">Name</dt>
-                      <dd>
-                        {[selectedAppointment.firstName, selectedAppointment.lastName]
-                          .filter(Boolean)
-                          .join(" ") || "-"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-zinc-500">Email</dt>
-                      <dd className="break-all">{selectedAppointment.email ?? "-"}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-zinc-500">Phone</dt>
-                      <dd>{selectedAppointment.phone ?? "-"}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-zinc-500">va_attrib</dt>
-                      <dd className="font-mono text-[11px]">{selectedAppointment.vaAttrib ?? "-"}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-zinc-500">gclid</dt>
-                      <dd className="font-mono text-[11px]">{selectedAppointment.gclid ?? "-"}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-zinc-500">ttclid</dt>
-                      <dd className="font-mono text-[11px]">{selectedAppointment.ttclid ?? "-"}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-zinc-500">Updated</dt>
-                      <dd>{selectedAppointment.updatedAt.toISOString()}</dd>
-                    </div>
-                  </dl>
-                </div>
-                <div className="rounded-xl border border-zinc-800 p-4">
-                  <h3 className="text-sm font-medium text-zinc-200">Attribution</h3>
-                  {selectedAttribution ? (
-                    <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <dt className="text-zinc-500">Token</dt>
-                        <dd className="font-mono text-[11px]">{selectedAttribution.token}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-zinc-500">Last Touch</dt>
-                        <dd>{selectedAttribution.lastTouchAt.toISOString()}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-zinc-500">Last URL</dt>
-                        <dd className="break-all">{selectedAttribution.lastUrl ?? "-"}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-zinc-500">Referrer</dt>
-                        <dd className="break-all">{selectedAttribution.lastReferrer ?? "-"}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-zinc-500">utm_source</dt>
-                        <dd>{selectedAttribution.utmSource ?? "-"}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-zinc-500">utm_medium</dt>
-                        <dd>{selectedAttribution.utmMedium ?? "-"}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-zinc-500">utm_campaign</dt>
-                        <dd>{selectedAttribution.utmCampaign ?? "-"}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-zinc-500">utm_term</dt>
-                        <dd>{selectedAttribution.utmTerm ?? "-"}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-zinc-500">utm_content</dt>
-                        <dd>{selectedAttribution.utmContent ?? "-"}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-zinc-500">gclid</dt>
-                        <dd className="font-mono text-[11px]">{selectedAttribution.gclid ?? "-"}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-zinc-500">gbraid</dt>
-                        <dd className="font-mono text-[11px]">{selectedAttribution.gbraid ?? "-"}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-zinc-500">wbraid</dt>
-                        <dd className="font-mono text-[11px]">{selectedAttribution.wbraid ?? "-"}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-zinc-500">dclid</dt>
-                        <dd className="font-mono text-[11px]">{selectedAttribution.dclid ?? "-"}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-zinc-500">fbclid</dt>
-                        <dd className="font-mono text-[11px]">{selectedAttribution.fbclid ?? "-"}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-zinc-500">fbp</dt>
-                        <dd className="font-mono text-[11px]">{selectedAttribution.fbp ?? "-"}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-zinc-500">fbc</dt>
-                        <dd className="font-mono text-[11px]">{selectedAttribution.fbc ?? "-"}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-zinc-500">ttclid</dt>
-                        <dd className="font-mono text-[11px]">{selectedAttribution.ttclid ?? "-"}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-zinc-500">msclkid</dt>
-                        <dd className="font-mono text-[11px]">{selectedAttribution.msclkid ?? "-"}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-zinc-500">hubspotutk</dt>
-                        <dd className="font-mono text-[11px]">{selectedAttribution.hubspotutk ?? "-"}</dd>
-                      </div>
-                    </dl>
-                  ) : (
-                    <p className="mt-3 text-xs text-zinc-400">
-                      No attribution found for token {selectedAppointment.vaAttrib ?? "-"}.
-                    </p>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <p className="mt-3 text-xs text-zinc-400">Appointment not found.</p>
-            )}
-          </section>
-        ) : null}
+        {/* Modal for selected appointment */}
+        {selectedAppointmentId && selectedAppointment && (
+          <AppointmentModal
+            appointment={selectedAppointment}
+            attribution={selectedAttribution}
+            clearHref={clearHref}
+          />
+        )}
 
-        <section className="mt-10">
-          <h2 className="text-lg font-medium">Attributions</h2>
-          <div className="mt-3 overflow-auto rounded-xl border border-zinc-800">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-zinc-900 text-xs uppercase text-zinc-400">
-                <tr>
-                  <th className="px-3 py-2">Token</th>
-                  <th className="px-3 py-2">Last URL</th>
-                  <th className="px-3 py-2">Referrer</th>
-                  <th className="px-3 py-2">utm_source</th>
-                  <th className="px-3 py-2">utm_medium</th>
-                  <th className="px-3 py-2">utm_campaign</th>
-                  <th className="px-3 py-2">gclid</th>
-                  <th className="px-3 py-2">ttclid</th>
-                  <th className="px-3 py-2">Last Touch</th>
-                </tr>
-              </thead>
-              <tbody>
-                {attributions.map(attrib => {
-                  const isSelected = selectedAttribution?.token === attrib.token;
-                  return (
-                    <tr
-                      key={attrib.token}
-                      className={`border-t border-zinc-800 ${isSelected ? "bg-zinc-900/60" : ""}`}
-                    >
-                    <td className="px-3 py-2 font-mono text-xs">{attrib.token}</td>
-                    <td className="px-3 py-2">{attrib.lastUrl ?? "-"}</td>
-                    <td className="px-3 py-2">{attrib.lastReferrer ?? "-"}</td>
-                    <td className="px-3 py-2">{attrib.utmSource ?? "-"}</td>
-                    <td className="px-3 py-2">{attrib.utmMedium ?? "-"}</td>
-                    <td className="px-3 py-2">{attrib.utmCampaign ?? "-"}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{attrib.gclid ?? "-"}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{attrib.ttclid ?? "-"}</td>
-                    <td className="px-3 py-2 text-xs text-zinc-400">
-                      {attrib.lastTouchAt.toISOString()}
-                    </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </section>
+        <CollapsibleAttributions
+          attributions={attributions}
+          selectedToken={selectedAttribution?.token ?? null}
+        />
 
-        <section className="mt-10">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-lg font-medium">Appointments</h2>
-            <div className="flex flex-wrap gap-2 text-xs">
+        <section className="mb-12">
+          <div className="flex items-center justify-between gap-4 mb-6">
+            <h2 className="text-2xl font-semibold flex items-center gap-2">
+              <svg className="w-5 h-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              Appointments
+            </h2>
+            <div className="flex flex-wrap gap-2">
               <a
-                className={`rounded-full border px-3 py-1 ${
+                className={`group relative overflow-hidden rounded-full border px-4 py-2 text-xs font-medium transition-all ${
                   trialOnly
-                    ? "border-zinc-800 text-zinc-400 hover:text-zinc-200"
-                    : "border-zinc-600 text-zinc-100"
+                    ? "border-zinc-700 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200"
+                    : "border-blue-500/50 bg-blue-500/10 text-blue-300 shadow-lg shadow-blue-500/20"
                 }`}
                 href={allHref}
               >
-                All
+                {!trialOnly && (
+                  <span className="absolute inset-0 bg-gradient-to-r from-blue-500/20 to-transparent" />
+                )}
+                <span className="relative">All</span>
               </a>
               <a
-                className={`rounded-full border px-3 py-1 ${
+                className={`group relative overflow-hidden rounded-full border px-4 py-2 text-xs font-medium transition-all ${
                   trialOnly
-                    ? "border-zinc-600 text-zinc-100"
-                    : "border-zinc-800 text-zinc-400 hover:text-zinc-200"
+                    ? "border-blue-500/50 bg-blue-500/10 text-blue-300 shadow-lg shadow-blue-500/20"
+                    : "border-zinc-700 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200"
                 }`}
                 href={trialHref}
               >
-                Trial only
+                {trialOnly && (
+                  <span className="absolute inset-0 bg-gradient-to-r from-blue-500/20 to-transparent" />
+                )}
+                <span className="relative">Trial only</span>
               </a>
             </div>
           </div>
-          <div className="mt-3 overflow-auto rounded-xl border border-zinc-800">
+          <div className="overflow-auto rounded-2xl border border-zinc-800 bg-zinc-900/30 backdrop-blur-sm">
             <table className="w-full text-left text-sm">
-              <thead className="bg-zinc-900 text-xs uppercase text-zinc-400">
-                <tr>
-                  <th className="px-3 py-2">ID</th>
-                  <th className="px-3 py-2">Type</th>
-                  <th className="px-3 py-2">Scheduled By</th>
-                  <th className="px-3 py-2">Status</th>
-                  <th className="px-3 py-2">Email</th>
-                  <th className="px-3 py-2">Phone</th>
-                  <th className="px-3 py-2">va_attrib</th>
-                  <th className="px-3 py-2">gclid</th>
-                  <th className="px-3 py-2">ttclid</th>
-                  <th className="px-3 py-2">Updated</th>
-                  <th className="px-3 py-2">View</th>
+              <thead className="bg-gradient-to-r from-zinc-900 to-zinc-900/80">
+                <tr className="border-b border-zinc-800">
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">ID</th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">Type</th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">Scheduled By</th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">Status</th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">Email</th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">Phone</th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">VA Attrib</th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">GCLID</th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">TTCLID</th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">Updated</th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">Action</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-zinc-800/50">
                 {appointments.map(appt => {
                   const apptParams = new URLSearchParams();
                   if (trialOnly) apptParams.set("trial", "1");
                   apptParams.set("appt", appt.id);
-                  const apptHref = `/?${apptParams.toString()}#selected-appointment`;
+                  const apptHref = `/?${apptParams.toString()}`;
                   const isSelected = selectedAppointmentId === appt.id;
                   return (
                     <tr
                       key={appt.id}
-                      className={`border-t border-zinc-800 ${isSelected ? "bg-zinc-900/60" : ""}`}
+                      className={`transition-colors hover:bg-zinc-800/30 ${
+                        isSelected ? "bg-blue-500/10 border-l-2 border-l-blue-500" : ""
+                      }`}
                     >
-                      <td className="px-3 py-2 font-mono text-xs">{appt.id}</td>
-                      <td className="px-3 py-2">{appt.appointmentTypeId ?? "-"}</td>
-                      <td className="px-3 py-2">{appt.scheduledBy ?? "-"}</td>
-                      <td className="px-3 py-2">{appt.status ?? "-"}</td>
-                      <td className="px-3 py-2">{appt.email ?? "-"}</td>
-                      <td className="px-3 py-2">{appt.phone ?? "-"}</td>
-                      <td className="px-3 py-2 font-mono text-xs">{appt.vaAttrib ?? "-"}</td>
-                      <td className="px-3 py-2 font-mono text-xs">{appt.gclid ?? "-"}</td>
-                      <td className="px-3 py-2 font-mono text-xs">{appt.ttclid ?? "-"}</td>
-                      <td className="px-3 py-2 text-xs text-zinc-400">
+                      <td className="px-4 py-3 font-mono text-xs text-blue-400">{appt.id}</td>
+                      <td className="px-4 py-3 text-xs text-zinc-200">{appt.appointmentTypeId ?? "-"}</td>
+                      <td className="px-4 py-3 text-xs text-zinc-200">{appt.scheduledBy ?? "-"}</td>
+                      <td className="px-4 py-3">
+                        <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-1 text-[10px] font-medium text-emerald-400">
+                          {appt.status ?? "-"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-xs text-zinc-300">{appt.email ?? "-"}</td>
+                      <td className="px-4 py-3 text-xs text-zinc-300">{appt.phone ?? "-"}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-purple-400">{appt.vaAttrib ?? "-"}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-zinc-400">{appt.gclid ?? "-"}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-zinc-400">{appt.ttclid ?? "-"}</td>
+                      <td className="px-4 py-3 text-[11px] text-zinc-500">
                         {appt.updatedAt.toISOString()}
                       </td>
-                      <td className="px-3 py-2 text-xs">
-                        <a className="text-blue-300 hover:text-blue-200" href={apptHref}>
-                          View
+                      <td className="px-4 py-3">
+                        <a
+                          className="group inline-flex items-center gap-1 text-xs text-blue-400 transition-colors hover:text-blue-300"
+                          href={apptHref}
+                        >
+                          <span>View</span>
+                          <svg className="h-3 w-3 transition-transform group-hover:translate-x-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          </svg>
                         </a>
                       </td>
                     </tr>
@@ -351,48 +196,7 @@ export default async function Home({
           </div>
         </section>
 
-        <section className="mt-10">
-          <h2 className="text-lg font-medium">Canonical Events</h2>
-          <div className="mt-3 overflow-auto rounded-xl border border-zinc-800">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-zinc-900 text-xs uppercase text-zinc-400">
-                <tr>
-                  <th className="px-3 py-2">Event</th>
-                  <th className="px-3 py-2">Appointment</th>
-                  <th className="px-3 py-2">Attrib</th>
-                  <th className="px-3 py-2">Event ID</th>
-                  <th className="px-3 py-2">Time</th>
-                  <th className="px-3 py-2">Deliveries</th>
-                </tr>
-              </thead>
-              <tbody>
-                {canonicalEvents.map(ce => (
-                  <tr key={ce.id} className="border-t border-zinc-800">
-                    <td className="px-3 py-2">{ce.name}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{ce.appointmentId ?? "-"}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{ce.attributionTok ?? "-"}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{ce.eventId}</td>
-                    <td className="px-3 py-2 text-xs text-zinc-400">
-                      {ce.eventTime.toISOString()}
-                    </td>
-                    <td className="px-3 py-2 text-xs">
-                      <div className="flex flex-wrap gap-2">
-                        {ce.deliveries.map(d => (
-                          <span
-                            key={d.id}
-                            className="rounded-full border border-zinc-700 px-2 py-1 text-[11px]"
-                          >
-                            {d.platform}:{d.status}
-                          </span>
-                        ))}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
+        <CollapsibleCanonicalEvents canonicalEvents={canonicalEvents} />
       </div>
     </main>
   );

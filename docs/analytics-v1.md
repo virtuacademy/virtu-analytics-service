@@ -193,7 +193,7 @@ Notes:
 
 4) Record field IDs and appointment type ID in environment variables:
 - `ACUITY_FIELD_VA_ATTRIB_ID`, `ACUITY_FIELD_GCLID_ID`, ...
-- `ACUITY_TRIAL_APPOINTMENT_TYPE_ID`
+- `ACUITY_TRIAL_APPOINTMENT_TYPE_IDS` (comma-separated)
 
 ## Delivery behavior (Meta, Google Ads, TikTok, HubSpot)
 

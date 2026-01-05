@@ -1,4 +1,7 @@
 //TODO: Update back to https://react-node-appva.herokuapp.com/hook-catch after
+//TODO: Security check/password protect homepage
+//TODO: Cleanup view
+//TODO: Make clear readme.md, claude, and agent
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { sha256Base64, sha256Hex } from "@/lib/crypto";
@@ -147,8 +150,19 @@ export async function POST(req: NextRequest) {
     }
   });
 
-  const TRIAL_TYPE_ID = process.env.ACUITY_TRIAL_APPOINTMENT_TYPE_ID;
-  const isTrial = TRIAL_TYPE_ID && String(appt.appointmentTypeID ?? "") === String(TRIAL_TYPE_ID);
+  const trialTypeIdsRaw =
+    process.env.ACUITY_TRIAL_APPOINTMENT_TYPE_IDS ?? process.env.ACUITY_TRIAL_APPOINTMENT_TYPE_ID ?? "";
+  const trialTypeIds = trialTypeIdsRaw
+    .split(",")
+    .map(id => id.trim())
+    .filter(Boolean);
+  const apptTypeId =
+    appt.appointmentTypeID != null
+      ? String(appt.appointmentTypeID)
+      : appointmentTypeID
+        ? String(appointmentTypeID)
+        : "";
+  const isTrial = trialTypeIds.length > 0 && trialTypeIds.includes(apptTypeId);
 
   let eventName: "TRIAL_BOOKED" | "TRIAL_RESCHEDULED" | "TRIAL_CANCELED" | "APPOINTMENT_UPDATED" = "APPOINTMENT_UPDATED";
   if (isTrial) {
