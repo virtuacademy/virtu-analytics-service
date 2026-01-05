@@ -26,6 +26,7 @@ export const typeDefs = /* GraphQL */ `
     phone: String
     firstName: String
     lastName: String
+    scheduledBy: String
     vaAttrib: String
     gclid: String
     ttclid: String

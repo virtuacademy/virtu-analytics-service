@@ -10,6 +10,7 @@ export type AcuityAppointment = {
   lastName?: string;
   email?: string;
   phone?: string;
+  scheduledBy?: string | null;
   fields?: Array<{ id: number; name?: string; value?: string }>;
   forms?: Array<{
     id: number;
@@ -64,6 +65,7 @@ export function appointmentSnapshot(appt: AcuityAppointment) {
     email: normEmail(appt.email) ?? null,
     phone: normPhoneE164Digits(appt.phone) ?? null,
     firstName: appt.firstName?.trim() ?? null,
-    lastName: appt.lastName?.trim() ?? null
+    lastName: appt.lastName?.trim() ?? null,
+    scheduledBy: appt.scheduledBy?.trim() ?? null
   };
 }
