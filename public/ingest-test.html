@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Virtu Ingest Test</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: "IBM Plex Sans", "Segoe UI", Tahoma, sans-serif;
+        line-height: 1.4;
+      }
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #f4f2ee;
+        color: #1c1917;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 24px;
+      }
+      p {
+        margin: 0 0 16px;
+        color: #57534e;
+      }
+      .card {
+        background: #fff;
+        border: 1px solid #e7e5e4;
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 6px 24px rgba(12, 10, 9, 0.06);
+        margin-bottom: 16px;
+      }
+      .row {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      button {
+        border: 1px solid #0f172a;
+        background: #0f172a;
+        color: #fff;
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-size: 14px;
+        cursor: pointer;
+      }
+      button.secondary {
+        background: #fff;
+        color: #0f172a;
+      }
+      code,
+      pre {
+        font-family: "IBM Plex Mono", "SFMono-Regular", ui-monospace, monospace;
+        font-size: 12px;
+      }
+      pre {
+        background: #fafaf9;
+        border: 1px solid #e7e5e4;
+        border-radius: 8px;
+        padding: 12px;
+        overflow: auto;
+      }
+      .meta {
+        font-size: 12px;
+        color: #78716c;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Virtu Ingest Test</h1>
+    <p>Simple client to send /api/attrib/ingest and the dev Acuity webhook.</p>
+
+    <div class="card">
+      <div class="row">
+        <button id="send-ingest">Send ingest</button>
+        <button id="send-webhook" class="secondary">Send dev webhook</button>
+      </div>
+      <p class="meta" style="margin-top: 10px">
+        Dev webhook requires server env <code>ACUITY_WEBHOOK_DEV_BYPASS=1</code> and header
+        <code>x-acuity-dev: 1</code>.
+      </p>
+    </div>
+
+    <div class="card">
+      <strong>Detected params</strong>
+      <pre id="params">(loading)</pre>
+    </div>
+
+    <div class="card">
+      <strong>Cookies (readable in JS)</strong>
+      <pre id="cookies">(loading)</pre>
+      <p class="meta">
+        Note: <code>va_vid</code> and <code>va_sid</code> are httpOnly and won’t appear here.
+      </p>
+    </div>
+
+    <div class="card">
+      <strong>Ingest response</strong>
+      <pre id="ingest-response">(waiting)</pre>
+    </div>
+
+    <div class="card">
+      <strong>Webhook response</strong>
+      <pre id="webhook-response">(waiting)</pre>
+    </div>
+
+    <script>
+      const paramsEl = document.getElementById("params");
+      const cookiesEl = document.getElementById("cookies");
+      const ingestEl = document.getElementById("ingest-response");
+      const webhookEl = document.getElementById("webhook-response");
+      const ingestBtn = document.getElementById("send-ingest");
+      const webhookBtn = document.getElementById("send-webhook");
+
+      function parseCookies() {
+        return document.cookie
+          .split(";")
+          .map(part => part.trim())
+          .filter(Boolean)
+          .reduce((acc, pair) => {
+            const idx = pair.indexOf("=");
+            if (idx === -1) return acc;
+            const key = pair.slice(0, idx);
+            const value = pair.slice(idx + 1);
+            acc[key] = value;
+            return acc;
+          }, {});
+      }
+
+      function pickParams() {
+        const sp = new URLSearchParams(window.location.search);
+        const get = key => (sp.has(key) ? sp.get(key) : null);
+        const utm = {
+          utm_source: get("utm_source"),
+          utm_medium: get("utm_medium"),
+          utm_campaign: get("utm_campaign"),
+          utm_term: get("utm_term"),
+          utm_content: get("utm_content")
+        };
+        const click = {
+          gclid: get("gclid"),
+          gbraid: get("gbraid"),
+          wbraid: get("wbraid"),
+          dclid: get("dclid"),
+          fbclid: get("fbclid"),
+          fbp: get("fbp"),
+          fbc: get("fbc"),
+          ttclid: get("ttclid"),
+          msclkid: get("msclkid")
+        };
+        const hubspotutk = get("hubspotutk");
+        return { utm, click, hubspotutk };
+      }
+
+      function compact(obj) {
+        const out = {};
+        Object.keys(obj).forEach(key => {
+          const value = obj[key];
+          if (value !== null && value !== undefined && value !== "") {
+            out[key] = value;
+          }
+        });
+        return out;
+      }
+
+      function refreshCookies() {
+        const cookies = parseCookies();
+        cookiesEl.textContent = JSON.stringify(cookies, null, 2);
+      }
+
+      async function sendIngest() {
+        ingestEl.textContent = "Sending...";
+        const picked = pickParams();
+        const payload = {
+          url: window.location.href,
+          referrer: document.referrer || null,
+          utm: compact(picked.utm),
+          click: compact(picked.click),
+          hubspotutk: picked.hubspotutk || null
+        };
+        paramsEl.textContent = JSON.stringify(payload, null, 2);
+
+        const res = await fetch("/api/attrib/ingest", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify(payload)
+        });
+        const text = await res.text();
+        ingestEl.textContent = text;
+        refreshCookies();
+      }
+
+      async function sendWebhook() {
+        webhookEl.textContent = "Sending...";
+        const cookies = parseCookies();
+        const vaAttrib = cookies.va_attrib || null;
+        const payload = {
+          action: "scheduled",
+          id: Date.now(),
+          appointmentTypeID: 1,
+          calendarID: 1,
+          vaAttrib,
+          appointment: {
+            id: Date.now(),
+            appointmentTypeID: 1,
+            calendarID: 1,
+            datetime: new Date().toISOString(),
+            email: "test@example.com",
+            phone: "+15551231234",
+            firstName: "Test",
+            lastName: "User"
+          }
+        };
+        const res = await fetch("/api/webhooks/acuity", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-acuity-dev": "1"
+          },
+          body: JSON.stringify(payload)
+        });
+        const text = await res.text();
+        webhookEl.textContent = text;
+      }
+
+      refreshCookies();
+      paramsEl.textContent = JSON.stringify(pickParams(), null, 2);
+
+      ingestBtn.addEventListener("click", () => {
+        sendIngest().catch(err => {
+          ingestEl.textContent = String(err);
+        });
+      });
+      webhookBtn.addEventListener("click", () => {
+        sendWebhook().catch(err => {
+          webhookEl.textContent = String(err);
+        });
+      });
+    </script>
+  </body>
+</html>

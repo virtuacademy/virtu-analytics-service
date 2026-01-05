@@ -1,0 +1,167 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CanonicalEventName {
+  TRIAL_BOOKED
+  TRIAL_RESCHEDULED
+  TRIAL_CANCELED
+  APPOINTMENT_UPDATED
+}
+
+enum DeliveryPlatform {
+  META
+  GOOGLE_ADS
+  TIKTOK
+  HUBSPOT
+}
+
+enum DeliveryStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  SKIPPED
+}
+
+model Visitor {
+  id           String   @id
+  createdAt    DateTime @default(now())
+  firstSeenAt  DateTime @default(now())
+  lastSeenAt   DateTime @updatedAt
+  sessions     Session[]
+}
+
+model Session {
+  id          String   @id
+  visitorId   String
+  createdAt   DateTime @default(now())
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @updatedAt
+  ipFirst     String?
+  uaFirst     String?
+
+  visitor     Visitor  @relation(fields: [visitorId], references: [id])
+
+  @@index([visitorId])
+}
+
+model Attribution {
+  token          String   @id
+  createdAt      DateTime @default(now())
+  firstTouchAt   DateTime
+  lastTouchAt    DateTime
+  firstUrl       String?
+  lastUrl        String?
+  firstReferrer  String?
+  lastReferrer   String?
+
+  utmSource      String?
+  utmMedium      String?
+  utmCampaign    String?
+  utmTerm        String?
+  utmContent     String?
+
+  gclid          String?
+  gbraid         String?
+  wbraid         String?
+  dclid          String?
+
+  fbclid         String?
+  fbp            String?
+  fbc            String?
+
+  ttclid         String?
+  msclkid        String?
+
+  hubspotutk     String?
+
+  visitorId      String?
+  sessionId      String?
+
+  @@index([gclid])
+  @@index([fbclid])
+  @@index([ttclid])
+}
+
+model InboundWebhook {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  source      String
+  action      String
+  externalId  String
+  bodyRaw     String
+  bodyHash    String
+
+  @@unique([source, action, externalId, bodyHash])
+  @@index([externalId])
+}
+
+model Appointment {
+  id                String   @id
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  appointmentTypeId String?
+  calendarId        String?
+  status            String?
+  datetime          String?
+
+  email             String?
+  phone             String?
+  firstName         String?
+  lastName          String?
+
+  vaAttrib          String?
+  gclid             String?
+  ttclid            String?
+  fbp               String?
+  fbc               String?
+
+  rawJson           String?
+
+  @@index([vaAttrib])
+  @@index([appointmentTypeId])
+}
+
+model CanonicalEvent {
+  id              String             @id @default(cuid())
+  createdAt       DateTime           @default(now())
+  name            CanonicalEventName
+  eventTime       DateTime
+  appointmentId   String?
+  attributionTok  String?
+  value           Float?
+  currency        String?
+
+  eventId         String
+
+  deliveries      Delivery[]
+
+  @@index([appointmentId])
+  @@index([attributionTok])
+  @@index([name, eventTime])
+}
+
+model Delivery {
+  id               String          @id @default(cuid())
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  canonicalEventId String
+  platform         DeliveryPlatform
+  status           DeliveryStatus  @default(PENDING)
+  attempts         Int             @default(0)
+  lastAttemptAt    DateTime?
+  responseCode     Int?
+  responseBody     String?
+
+  canonicalEvent   CanonicalEvent  @relation(fields: [canonicalEventId], references: [id])
+
+  @@unique([canonicalEventId, platform])
+  @@index([platform, status])
+}

@@ -1,65 +1,153 @@
-import Image from "next/image";
+import { prisma } from "@/lib/prisma";
 
-export default function Home() {
+export const runtime = "nodejs";
+
+export default async function Home() {
+  const appointments = await prisma.appointment.findMany({
+    orderBy: { updatedAt: "desc" },
+    take: 25
+  });
+
+  const attributions = await prisma.attribution.findMany({
+    orderBy: { lastTouchAt: "desc" },
+    take: 25
+  });
+
+  const canonicalEvents = await prisma.canonicalEvent.findMany({
+    orderBy: { createdAt: "desc" },
+    take: 25,
+    include: { deliveries: true }
+  });
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <main className="min-h-screen bg-zinc-950 text-zinc-100">
+      <div className="mx-auto max-w-6xl px-6 py-12">
+        <header className="flex flex-col gap-2">
+          <h1 className="text-3xl font-semibold">Virtu Analytics Debug</h1>
+          <p className="text-sm text-zinc-400">
+            Recent appointments, canonical events, and delivery results.
           </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+        </header>
+
+        <section className="mt-10">
+          <h2 className="text-lg font-medium">Attributions</h2>
+          <div className="mt-3 overflow-auto rounded-xl border border-zinc-800">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-zinc-900 text-xs uppercase text-zinc-400">
+                <tr>
+                  <th className="px-3 py-2">Token</th>
+                  <th className="px-3 py-2">Last URL</th>
+                  <th className="px-3 py-2">Referrer</th>
+                  <th className="px-3 py-2">utm_source</th>
+                  <th className="px-3 py-2">utm_medium</th>
+                  <th className="px-3 py-2">utm_campaign</th>
+                  <th className="px-3 py-2">gclid</th>
+                  <th className="px-3 py-2">ttclid</th>
+                  <th className="px-3 py-2">Last Touch</th>
+                </tr>
+              </thead>
+              <tbody>
+                {attributions.map(attrib => (
+                  <tr key={attrib.token} className="border-t border-zinc-800">
+                    <td className="px-3 py-2 font-mono text-xs">{attrib.token}</td>
+                    <td className="px-3 py-2">{attrib.lastUrl ?? "-"}</td>
+                    <td className="px-3 py-2">{attrib.lastReferrer ?? "-"}</td>
+                    <td className="px-3 py-2">{attrib.utmSource ?? "-"}</td>
+                    <td className="px-3 py-2">{attrib.utmMedium ?? "-"}</td>
+                    <td className="px-3 py-2">{attrib.utmCampaign ?? "-"}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{attrib.gclid ?? "-"}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{attrib.ttclid ?? "-"}</td>
+                    <td className="px-3 py-2 text-xs text-zinc-400">
+                      {attrib.lastTouchAt.toISOString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="mt-10">
+          <h2 className="text-lg font-medium">Appointments</h2>
+          <div className="mt-3 overflow-auto rounded-xl border border-zinc-800">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-zinc-900 text-xs uppercase text-zinc-400">
+                <tr>
+                  <th className="px-3 py-2">ID</th>
+                  <th className="px-3 py-2">Type</th>
+                  <th className="px-3 py-2">Status</th>
+                  <th className="px-3 py-2">Email</th>
+                  <th className="px-3 py-2">Phone</th>
+                  <th className="px-3 py-2">va_attrib</th>
+                  <th className="px-3 py-2">gclid</th>
+                  <th className="px-3 py-2">ttclid</th>
+                  <th className="px-3 py-2">Updated</th>
+                </tr>
+              </thead>
+              <tbody>
+                {appointments.map(appt => (
+                  <tr key={appt.id} className="border-t border-zinc-800">
+                    <td className="px-3 py-2 font-mono text-xs">{appt.id}</td>
+                    <td className="px-3 py-2">{appt.appointmentTypeId ?? "-"}</td>
+                    <td className="px-3 py-2">{appt.status ?? "-"}</td>
+                    <td className="px-3 py-2">{appt.email ?? "-"}</td>
+                    <td className="px-3 py-2">{appt.phone ?? "-"}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{appt.vaAttrib ?? "-"}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{appt.gclid ?? "-"}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{appt.ttclid ?? "-"}</td>
+                    <td className="px-3 py-2 text-xs text-zinc-400">
+                      {appt.updatedAt.toISOString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="mt-10">
+          <h2 className="text-lg font-medium">Canonical Events</h2>
+          <div className="mt-3 overflow-auto rounded-xl border border-zinc-800">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-zinc-900 text-xs uppercase text-zinc-400">
+                <tr>
+                  <th className="px-3 py-2">Event</th>
+                  <th className="px-3 py-2">Appointment</th>
+                  <th className="px-3 py-2">Attrib</th>
+                  <th className="px-3 py-2">Event ID</th>
+                  <th className="px-3 py-2">Time</th>
+                  <th className="px-3 py-2">Deliveries</th>
+                </tr>
+              </thead>
+              <tbody>
+                {canonicalEvents.map(ce => (
+                  <tr key={ce.id} className="border-t border-zinc-800">
+                    <td className="px-3 py-2">{ce.name}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{ce.appointmentId ?? "-"}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{ce.attributionTok ?? "-"}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{ce.eventId}</td>
+                    <td className="px-3 py-2 text-xs text-zinc-400">
+                      {ce.eventTime.toISOString()}
+                    </td>
+                    <td className="px-3 py-2 text-xs">
+                      <div className="flex flex-wrap gap-2">
+                        {ce.deliveries.map(d => (
+                          <span
+                            key={d.id}
+                            className="rounded-full border border-zinc-700 px-2 py-1 text-[11px]"
+                          >
+                            {d.platform}:{d.status}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </main>
   );
 }
