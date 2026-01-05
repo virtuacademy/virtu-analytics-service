@@ -89,6 +89,8 @@ export async function POST(req: NextRequest) {
   });
 
   const existing = await prisma.attribution.findUnique({ where: { token: attribTok } });
+  const ipAddress = ip ?? null;
+  const userAgent = ua ?? null;
   const utmSource = normalizeValue(body.utm?.utm_source);
   const utmMedium = normalizeValue(body.utm?.utm_medium);
   const utmCampaign = normalizeValue(body.utm?.utm_campaign);
@@ -112,6 +114,8 @@ export async function POST(req: NextRequest) {
       lastTouchAt: t,
       lastUrl: body.url,
       lastReferrer: body.referrer ?? null,
+      ipAddress: ipAddress ?? existing?.ipAddress ?? null,
+      userAgent: userAgent ?? existing?.userAgent ?? null,
 
       utmSource: utmSource ?? existing?.utmSource ?? null,
       utmMedium: utmMedium ?? existing?.utmMedium ?? null,
@@ -144,6 +148,8 @@ export async function POST(req: NextRequest) {
       lastUrl: body.url,
       firstReferrer: body.referrer ?? null,
       lastReferrer: body.referrer ?? null,
+      ipAddress: ipAddress ?? null,
+      userAgent: userAgent ?? null,
 
       utmSource: utmSource ?? null,
       utmMedium: utmMedium ?? null,

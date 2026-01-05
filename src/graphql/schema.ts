@@ -15,6 +15,8 @@ export const typeDefs = /* GraphQL */ `
     fbc: String
     lastUrl: String
     lastReferrer: String
+    ipAddress: String
+    userAgent: String
   }
 
   type Appointment {
