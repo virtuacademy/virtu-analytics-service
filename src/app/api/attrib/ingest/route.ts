@@ -24,6 +24,13 @@ function now() {
   return new Date();
 }
 
+function normalizeValue(value?: string | null) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+const SESSION_WINDOW_MS = 30 * 60 * 1000;
+
 export async function OPTIONS(req: NextRequest) {
   const res = NextResponse.json({ ok: true });
   return withCors(res, req.headers.get("origin"));
@@ -46,30 +53,58 @@ export async function POST(req: NextRequest) {
   const existingSid = req.cookies.get("va_sid")?.value ?? null;
   const existingAttrib = req.cookies.get("va_attrib")?.value ?? null;
 
+  const t = now();
   const vid = existingVid ?? randomId();
-  const sid = existingSid ?? randomId();
+  let sid = existingSid ?? null;
   const attribTok = existingAttrib ?? randomId();
+
+  if (sid) {
+    const existingSession = await prisma.session.findUnique({ where: { id: sid } });
+    if (!existingSession) {
+      sid = null;
+    } else {
+      const inactiveMs = t.getTime() - existingSession.lastSeenAt.getTime();
+      if (inactiveMs > SESSION_WINDOW_MS) sid = null;
+    }
+  }
+
+  if (!sid) sid = randomId();
 
   await prisma.visitor.upsert({
     where: { id: vid },
-    update: { lastSeenAt: now() },
-    create: { id: vid, firstSeenAt: now() }
+    update: { lastSeenAt: t },
+    create: { id: vid, firstSeenAt: t }
   });
 
   await prisma.session.upsert({
     where: { id: sid },
-    update: { lastSeenAt: now() },
+    update: { lastSeenAt: t },
     create: {
       id: sid,
       visitorId: vid,
-      firstSeenAt: now(),
+      firstSeenAt: t,
       ipFirst: ip ?? undefined,
       uaFirst: ua ?? undefined
     }
   });
 
   const existing = await prisma.attribution.findUnique({ where: { token: attribTok } });
-  const t = now();
+  const utmSource = normalizeValue(body.utm?.utm_source);
+  const utmMedium = normalizeValue(body.utm?.utm_medium);
+  const utmCampaign = normalizeValue(body.utm?.utm_campaign);
+  const utmTerm = normalizeValue(body.utm?.utm_term);
+  const utmContent = normalizeValue(body.utm?.utm_content);
+
+  const gclid = normalizeValue(body.click?.gclid);
+  const gbraid = normalizeValue(body.click?.gbraid);
+  const wbraid = normalizeValue(body.click?.wbraid);
+  const dclid = normalizeValue(body.click?.dclid);
+  const fbclid = normalizeValue(body.click?.fbclid);
+  const fbp = normalizeValue(body.click?.fbp);
+  const fbc = normalizeValue(body.click?.fbc);
+  const ttclid = normalizeValue(body.click?.ttclid);
+  const msclkid = normalizeValue(body.click?.msclkid);
+  const hubspotutk = normalizeValue(body.hubspotutk);
 
   await prisma.attribution.upsert({
     where: { token: attribTok },
@@ -78,25 +113,25 @@ export async function POST(req: NextRequest) {
       lastUrl: body.url,
       lastReferrer: body.referrer ?? null,
 
-      utmSource: body.utm?.utm_source ?? existing?.utmSource ?? null,
-      utmMedium: body.utm?.utm_medium ?? existing?.utmMedium ?? null,
-      utmCampaign: body.utm?.utm_campaign ?? existing?.utmCampaign ?? null,
-      utmTerm: body.utm?.utm_term ?? existing?.utmTerm ?? null,
-      utmContent: body.utm?.utm_content ?? existing?.utmContent ?? null,
+      utmSource: utmSource ?? existing?.utmSource ?? null,
+      utmMedium: utmMedium ?? existing?.utmMedium ?? null,
+      utmCampaign: utmCampaign ?? existing?.utmCampaign ?? null,
+      utmTerm: utmTerm ?? existing?.utmTerm ?? null,
+      utmContent: utmContent ?? existing?.utmContent ?? null,
 
-      gclid: body.click?.gclid ?? existing?.gclid ?? null,
-      gbraid: body.click?.gbraid ?? existing?.gbraid ?? null,
-      wbraid: body.click?.wbraid ?? existing?.wbraid ?? null,
-      dclid: body.click?.dclid ?? existing?.dclid ?? null,
+      gclid: gclid ?? existing?.gclid ?? null,
+      gbraid: gbraid ?? existing?.gbraid ?? null,
+      wbraid: wbraid ?? existing?.wbraid ?? null,
+      dclid: dclid ?? existing?.dclid ?? null,
 
-      fbclid: body.click?.fbclid ?? existing?.fbclid ?? null,
-      fbp: body.click?.fbp ?? existing?.fbp ?? null,
-      fbc: body.click?.fbc ?? existing?.fbc ?? null,
+      fbclid: fbclid ?? existing?.fbclid ?? null,
+      fbp: fbp ?? existing?.fbp ?? null,
+      fbc: fbc ?? existing?.fbc ?? null,
 
-      ttclid: body.click?.ttclid ?? existing?.ttclid ?? null,
-      msclkid: body.click?.msclkid ?? existing?.msclkid ?? null,
+      ttclid: ttclid ?? existing?.ttclid ?? null,
+      msclkid: msclkid ?? existing?.msclkid ?? null,
 
-      hubspotutk: body.hubspotutk ?? existing?.hubspotutk ?? null,
+      hubspotutk: hubspotutk ?? existing?.hubspotutk ?? null,
 
       visitorId: vid,
       sessionId: sid
@@ -110,25 +145,25 @@ export async function POST(req: NextRequest) {
       firstReferrer: body.referrer ?? null,
       lastReferrer: body.referrer ?? null,
 
-      utmSource: body.utm?.utm_source ?? null,
-      utmMedium: body.utm?.utm_medium ?? null,
-      utmCampaign: body.utm?.utm_campaign ?? null,
-      utmTerm: body.utm?.utm_term ?? null,
-      utmContent: body.utm?.utm_content ?? null,
+      utmSource: utmSource ?? null,
+      utmMedium: utmMedium ?? null,
+      utmCampaign: utmCampaign ?? null,
+      utmTerm: utmTerm ?? null,
+      utmContent: utmContent ?? null,
 
-      gclid: body.click?.gclid ?? null,
-      gbraid: body.click?.gbraid ?? null,
-      wbraid: body.click?.wbraid ?? null,
-      dclid: body.click?.dclid ?? null,
+      gclid: gclid ?? null,
+      gbraid: gbraid ?? null,
+      wbraid: wbraid ?? null,
+      dclid: dclid ?? null,
 
-      fbclid: body.click?.fbclid ?? null,
-      fbp: body.click?.fbp ?? null,
-      fbc: body.click?.fbc ?? null,
+      fbclid: fbclid ?? null,
+      fbp: fbp ?? null,
+      fbc: fbc ?? null,
 
-      ttclid: body.click?.ttclid ?? null,
-      msclkid: body.click?.msclkid ?? null,
+      ttclid: ttclid ?? null,
+      msclkid: msclkid ?? null,
 
-      hubspotutk: body.hubspotutk ?? null,
+      hubspotutk: hubspotutk ?? null,
       visitorId: vid,
       sessionId: sid
     }
