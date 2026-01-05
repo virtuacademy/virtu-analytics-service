@@ -7,6 +7,20 @@ import { enqueueDelivery } from "@/lib/qstash";
 
 export const runtime = "nodejs";
 
+type DevPayload = {
+  [key: string]: unknown;
+  action?: string;
+  id?: string | number;
+  appointmentTypeID?: string | number;
+  calendarID?: string | number;
+  appointment?: Record<string, unknown>;
+  vaAttrib?: string | null;
+  gclid?: string | null;
+  ttclid?: string | null;
+  fbp?: string | null;
+  fbc?: string | null;
+};
+
 export async function POST(req: NextRequest) {
   const devBypass =
     process.env.ACUITY_WEBHOOK_DEV_BYPASS === "1" && req.headers.get("x-acuity-dev") === "1";
@@ -30,20 +44,11 @@ export async function POST(req: NextRequest) {
   let externalId = "";
   let appointmentTypeID: string | null = null;
   let calendarID: string | null = null;
-  let devPayload:
-    | (Record<string, unknown> & {
-        appointment?: Record<string, unknown>;
-        vaAttrib?: string | null;
-        gclid?: string | null;
-        ttclid?: string | null;
-        fbp?: string | null;
-        fbc?: string | null;
-      })
-    | null = null;
+  let devPayload: DevPayload | null = null;
 
   if (devBypass) {
     try {
-      devPayload = JSON.parse(raw) as typeof devPayload;
+      devPayload = JSON.parse(raw) as DevPayload;
     } catch {
       return NextResponse.json({ ok: false, error: "Invalid JSON" }, { status: 400 });
     }

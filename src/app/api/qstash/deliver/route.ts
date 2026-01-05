@@ -153,8 +153,9 @@ export async function POST(req: NextRequest) {
         });
         await mark({ status: r.skipped ? "SKIPPED" : "FAILED", responseBody: r.reason });
       }
-    } catch (e: any) {
-      await mark({ status: "FAILED", responseBody: e?.message ?? "Unknown error" });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Unknown error";
+      await mark({ status: "FAILED", responseBody: message });
     }
   }
 

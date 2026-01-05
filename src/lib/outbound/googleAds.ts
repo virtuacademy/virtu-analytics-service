@@ -8,5 +8,6 @@ export async function sendGoogleAdsClickConversion(_args: {
   firstName?: string | null;
   lastName?: string | null;
 }) {
+  void _args;
   return { skipped: true, reason: "GOOGLE_ADS not implemented in v1 starter" };
 }
