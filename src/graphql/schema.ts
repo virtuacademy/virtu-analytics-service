@@ -43,6 +43,7 @@ export const typeDefs = /* GraphQL */ `
     lastAttemptAt: String
     responseCode: Int
     responseBody: String
+    requestBody: String
   }
 
   type CanonicalEvent {

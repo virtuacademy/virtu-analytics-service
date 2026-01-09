@@ -22,7 +22,7 @@ type GoogleAdsClickConversionArgs = {
 
 type GoogleAdsSendResult =
   | { skipped: true; reason: string }
-  | { skipped: false; ok: boolean; status: number; body: string };
+  | { skipped: false; ok: boolean; status: number; body: string; requestBody: string };
 
 type ConsentStatus = "GRANTED" | "DENIED";
 
@@ -376,13 +376,14 @@ export async function sendGoogleAdsClickConversion(args: GoogleAdsClickConversio
   const jobId = parseJobId(process.env.GOOGLE_ADS_JOB_ID);
   if (jobId) request.jobId = jobId;
   if (isTruthy(process.env.GOOGLE_ADS_VALIDATE_ONLY)) request.validateOnly = true;
+  const requestBody = JSON.stringify(request);
 
   let accessToken: string;
   try {
     accessToken = await fetchAccessToken(authResult.auth);
   } catch (error) {
     const message = error instanceof Error ? error.message : "OAuth token request failed";
-    return { skipped: false, ok: false, status: 500, body: message };
+    return { skipped: false, ok: false, status: 500, body: message, requestBody };
   }
 
   const url = `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}/customers/${customerId}:uploadClickConversions`;
@@ -398,7 +399,7 @@ export async function sendGoogleAdsClickConversion(args: GoogleAdsClickConversio
   const res = await fetch(url, {
     method: "POST",
     headers,
-    body: JSON.stringify(request),
+    body: requestBody,
     cache: "no-store"
   });
 
@@ -417,5 +418,5 @@ export async function sendGoogleAdsClickConversion(args: GoogleAdsClickConversio
 
   const body = parsed ? JSON.stringify(parsed) : text;
   const ok = res.ok && (!partialFailureError || isClickNotFoundOnly(partialFailureError));
-  return { skipped: false, ok, status: res.status, body };
+  return { skipped: false, ok, status: res.status, body, requestBody };
 }

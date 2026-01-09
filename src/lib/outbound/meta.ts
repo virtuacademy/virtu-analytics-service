@@ -51,15 +51,16 @@ export async function sendMetaCapi(args: {
       }
     ]
   };
+  const requestBody = JSON.stringify(payload);
 
   const url = `https://graph.facebook.com/v20.0/${encodeURIComponent(pixelId)}/events?access_token=${encodeURIComponent(accessToken)}`;
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: requestBody,
     cache: "no-store"
   });
 
   const text = await res.text();
-  return { ok: res.ok, status: res.status, body: text };
+  return { skipped: false, ok: res.ok, status: res.status, body: text, requestBody };
 }

@@ -162,6 +162,7 @@ model Delivery {
   lastAttemptAt    DateTime?
   responseCode     Int?
   responseBody     String?
+  requestBody      String?
 
   canonicalEvent   CanonicalEvent  @relation(fields: [canonicalEventId], references: [id])
 
