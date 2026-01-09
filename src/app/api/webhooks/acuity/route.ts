@@ -1,4 +1,3 @@
-//TODO: Make clear readme.md, claude, and agent
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { sha256Base64, sha256Hex } from "@/lib/crypto";
