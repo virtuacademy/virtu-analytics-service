@@ -22,7 +22,7 @@ type GoogleAdsClickConversionArgs = {
 
 type GoogleAdsSendResult =
   | { skipped: true; reason: string }
-  | { ok: boolean; status: number; body: string };
+  | { skipped: false; ok: boolean; status: number; body: string };
 
 type ConsentStatus = "GRANTED" | "DENIED";
 
@@ -65,7 +65,8 @@ function normalizeEmailForHash(value: string): string | null {
   const cleaned = candidate.trim().toLowerCase().replace(/\s+/g, "");
   const parts = cleaned.split("@");
   if (parts.length !== 2) return null;
-  let [local, domain] = parts;
+  let local = parts[0];
+  const domain = parts[1];
   if (!local || !domain) return null;
   if (domain === "gmail.com" || domain === "googlemail.com") {
     local = local.replace(/\./g, "");
@@ -213,14 +214,14 @@ function buildAuth(): { ok: true; auth: GoogleAdsAuth } | { ok: false; reason: s
   const customerId = normalizeCustomerId(process.env.GOOGLE_ADS_CUSTOMER_ID);
   const loginCustomerId = normalizeCustomerId(process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID);
 
-  const missing: string[] = [];
-  if (!developerToken) missing.push("GOOGLE_ADS_DEVELOPER_TOKEN");
-  if (!clientId) missing.push("GOOGLE_ADS_CLIENT_ID");
-  if (!clientSecret) missing.push("GOOGLE_ADS_CLIENT_SECRET");
-  if (!refreshToken) missing.push("GOOGLE_ADS_REFRESH_TOKEN");
-  if (!customerId) missing.push("GOOGLE_ADS_CUSTOMER_ID");
+  if (!developerToken || !clientId || !clientSecret || !refreshToken || !customerId) {
+    const missing: string[] = [];
+    if (!developerToken) missing.push("GOOGLE_ADS_DEVELOPER_TOKEN");
+    if (!clientId) missing.push("GOOGLE_ADS_CLIENT_ID");
+    if (!clientSecret) missing.push("GOOGLE_ADS_CLIENT_SECRET");
+    if (!refreshToken) missing.push("GOOGLE_ADS_REFRESH_TOKEN");
+    if (!customerId) missing.push("GOOGLE_ADS_CUSTOMER_ID");
 
-  if (missing.length > 0) {
     return { ok: false, reason: `Missing env: ${missing.join(", ")}` };
   }
 
@@ -381,7 +382,7 @@ export async function sendGoogleAdsClickConversion(args: GoogleAdsClickConversio
     accessToken = await fetchAccessToken(authResult.auth);
   } catch (error) {
     const message = error instanceof Error ? error.message : "OAuth token request failed";
-    return { ok: false, status: 500, body: message };
+    return { skipped: false, ok: false, status: 500, body: message };
   }
 
   const url = `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}/customers/${customerId}:uploadClickConversions`;
@@ -416,5 +417,5 @@ export async function sendGoogleAdsClickConversion(args: GoogleAdsClickConversio
 
   const body = parsed ? JSON.stringify(parsed) : text;
   const ok = res.ok && (!partialFailureError || isClickNotFoundOnly(partialFailureError));
-  return { ok, status: res.status, body };
+  return { skipped: false, ok, status: res.status, body };
 }

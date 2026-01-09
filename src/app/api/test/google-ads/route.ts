@@ -80,7 +80,7 @@ export async function POST(req: NextRequest) {
     orderId: typeof body.orderId === "string" ? body.orderId.trim() : undefined
   });
 
-  if ("skipped" in result && result.skipped) {
+  if (result.skipped) {
     return NextResponse.json({ ok: false, skipped: true, reason: result.reason });
   }
 

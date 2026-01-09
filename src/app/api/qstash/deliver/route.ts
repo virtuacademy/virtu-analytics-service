@@ -151,7 +151,7 @@ export async function POST(req: NextRequest) {
             lastName: appt?.lastName ?? null,
             userIpAddress: ip
           });
-          if ("skipped" in r && r.skipped) {
+          if (r.skipped) {
             await mark({ status: "SKIPPED", responseBody: r.reason });
           } else {
             await mark({ status: r.ok ? "SUCCESS" : "FAILED", responseCode: r.status, responseBody: r.body });
