@@ -56,7 +56,12 @@ export async function POST(req: NextRequest) {
   for (const d of ce.deliveries) {
     if (d.status === "SUCCESS" || d.status === "SKIPPED") continue;
 
-    const mark = async (patch: { status: "SUCCESS" | "FAILED" | "SKIPPED"; responseCode?: number; responseBody?: string }) => {
+    const mark = async (patch: {
+      status: "SUCCESS" | "FAILED" | "SKIPPED";
+      responseCode?: number;
+      responseBody?: string;
+      requestBody?: string;
+    }) => {
       await prisma.delivery.update({
         where: { id: d.id },
         data: {
@@ -64,7 +69,8 @@ export async function POST(req: NextRequest) {
           attempts: { increment: 1 },
           lastAttemptAt: new Date(),
           responseCode: patch.responseCode,
-          responseBody: patch.responseBody
+          responseBody: patch.responseBody,
+          requestBody: patch.requestBody
         }
       });
     };
@@ -93,8 +99,16 @@ export async function POST(req: NextRequest) {
             }
           });
 
-          if ("skipped" in r && r.skipped) await mark({ status: "SKIPPED", responseBody: String(r.reason) });
-          else await mark({ status: r.ok ? "SUCCESS" : "FAILED", responseCode: r.status, responseBody: r.body });
+          if (r.skipped) {
+            await mark({ status: "SKIPPED", responseBody: String(r.reason) });
+          } else {
+            await mark({
+              status: r.ok ? "SUCCESS" : "FAILED",
+              responseCode: r.status,
+              responseBody: r.body,
+              requestBody: r.requestBody
+            });
+          }
         }
       }
 
@@ -128,7 +142,12 @@ export async function POST(req: NextRequest) {
             ipAddress: ip
           });
 
-          await mark({ status: r.ok ? "SUCCESS" : "FAILED", responseCode: r.status, responseBody: r.body });
+          await mark({
+            status: r.ok ? "SUCCESS" : "FAILED",
+            responseCode: r.status,
+            responseBody: r.body,
+            requestBody: r.requestBody
+          });
         }
       }
 
@@ -154,7 +173,12 @@ export async function POST(req: NextRequest) {
           if (r.skipped) {
             await mark({ status: "SKIPPED", responseBody: r.reason });
           } else {
-            await mark({ status: r.ok ? "SUCCESS" : "FAILED", responseCode: r.status, responseBody: r.body });
+            await mark({
+              status: r.ok ? "SUCCESS" : "FAILED",
+              responseCode: r.status,
+              responseBody: r.body,
+              requestBody: r.requestBody
+            });
           }
         }
       }
@@ -164,7 +188,7 @@ export async function POST(req: NextRequest) {
           eventId: ce.eventId,
           ttclid: appt?.ttclid ?? attrib?.ttclid ?? null
         });
-        await mark({ status: r.skipped ? "SKIPPED" : "FAILED", responseBody: r.reason });
+        await mark({ status: r.skipped ? "SKIPPED" : "FAILED", responseBody: r.reason, requestBody: r.requestBody });
       }
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Unknown error";

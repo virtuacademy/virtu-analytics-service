@@ -23,6 +23,7 @@ export async function submitHubSpotForm(args: {
       ipAddress: args.ipAddress ?? undefined
     }
   };
+  const requestBody = JSON.stringify(body);
 
   const res = await fetch(url, {
     method: "POST",
@@ -30,10 +31,10 @@ export async function submitHubSpotForm(args: {
       Authorization: `Bearer ${args.accessToken}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify(body),
+    body: requestBody,
     cache: "no-store"
   });
 
   const text = await res.text();
-  return { ok: res.ok, status: res.status, body: text };
+  return { ok: res.ok, status: res.status, body: text, requestBody };
 }
