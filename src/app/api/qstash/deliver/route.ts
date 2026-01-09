@@ -133,17 +133,30 @@ export async function POST(req: NextRequest) {
       }
 
       if (d.platform === "GOOGLE_ADS") {
-        const r = await sendGoogleAdsClickConversion({
-          eventId: ce.eventId,
-          gclid: appt?.gclid ?? attrib?.gclid ?? null,
-          gbraid: attrib?.gbraid ?? null,
-          wbraid: attrib?.wbraid ?? null,
-          email,
-          phoneDigits: phone,
-          firstName: appt?.firstName ?? null,
-          lastName: appt?.lastName ?? null
-        });
-        await mark({ status: r.skipped ? "SKIPPED" : "FAILED", responseBody: r.reason });
+        if (mockOutbound) {
+          await mark({ status: "SUCCESS", responseBody: "mock_google_ads" });
+        } else {
+          const r = await sendGoogleAdsClickConversion({
+            eventId: ce.eventId,
+            eventName: ce.name,
+            eventTime: ce.eventTime,
+            conversionValue: ce.value ?? null,
+            currencyCode: ce.currency ?? null,
+            gclid: appt?.gclid ?? attrib?.gclid ?? null,
+            gbraid: attrib?.gbraid ?? null,
+            wbraid: attrib?.wbraid ?? null,
+            email,
+            phone,
+            firstName: appt?.firstName ?? null,
+            lastName: appt?.lastName ?? null,
+            userIpAddress: ip
+          });
+          if ("skipped" in r && r.skipped) {
+            await mark({ status: "SKIPPED", responseBody: r.reason });
+          } else {
+            await mark({ status: r.ok ? "SUCCESS" : "FAILED", responseCode: r.status, responseBody: r.body });
+          }
+        }
       }
 
       if (d.platform === "TIKTOK") {

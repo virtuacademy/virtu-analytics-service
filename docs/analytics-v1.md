@@ -1,5 +1,11 @@
 # Virtu Analytics v1
 
+## TODO:
+- check that only initial schedules are counted (not reschedules). 
+- Add support for trial vs regular bookings (all track). 
+- Google ads: set new vs. old customer data for conversions. 
+- Session data for google ads conversion stuff
+- Add cart-data
 ## Overview
 
 This service is the source of truth for attribution and conversions across Webflow + Acuity today and the Opus app later.
@@ -48,6 +54,8 @@ Queue worker:
 
 Debug:
 - `POST /api/graphql` - Apollo GraphQL endpoint to inspect attribution and deliveries.
+Testing:
+- `POST /api/test/google-ads` - manual Google Ads upload using `sendGoogleAdsClickConversion` (requires `GOOGLE_ADS_TEST_SECRET`).
 
 Dashboard:
 - `GET /` - dashboard UI (requires login if `AUTH_PASSWORD` is set)
@@ -64,6 +72,7 @@ See `.env.example` for the full list. Key values:
 - QStash: `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`
 - Meta: `META_PIXEL_ID`, `META_CAPI_ACCESS_TOKEN`
 - HubSpot: `HUBSPOT_PORTAL_ID`, `HUBSPOT_TRIAL_FORM_GUID`, `HUBSPOT_PRIVATE_APP_TOKEN`
+- Google Ads: `GOOGLE_ADS_DEVELOPER_TOKEN`, OAuth creds, `GOOGLE_ADS_CUSTOMER_ID`, `GOOGLE_ADS_CONVERSION_ACTION_ID(S)`, `GOOGLE_ADS_AD_USER_DATA_CONSENT`, `GOOGLE_ADS_CONVERSION_TIMEZONE(_OFFSET)`, default phone country
 - Optional: `OUTBOUND_MODE=mock` (skip outbound calls and mark deliveries as success)
 - Optional: `AUTH_PASSWORD` (protects the dashboard; login at `/login`)
 
@@ -143,36 +152,119 @@ The Acuity iframe cannot read cookies because it is on `*.as.me`, so we pass the
 ```html
 <script>
 (function () {
+  const ACUITY_OWNER_ID = "XXXXXX";
+  const GA_MEASUREMENT_ID = "G-2GJPZWGDSH";
+
+  const fieldMap = {
+    va_attrib: "field:17785670",
+    utm_source: "field:7449269",
+    utm_medium: "field:7449270",
+    utm_term: "field:7449271",
+    utm_campaign: "field:7449272",
+    gclid: "field:7449277",
+    fbclid: "field:9386123",
+    awc: "field:10292912",
+    ua: "field:9386202",
+    sref_id: "sref_id",
+    sscid: "sscid"
+  };
+
   function readCookie(name) {
-    const m = document.cookie.match(new RegExp("(?:^|;\\s*)" + name.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&") + "=([^;]*)"));
+    const m = document.cookie.match(
+      new RegExp("(?:^|;\\s*)" + name.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&") + "=([^;]*)")
+    );
     return m ? decodeURIComponent(m[1]) : null;
   }
 
-  const va_attrib = readCookie("va_attrib") || "";
-  const fbp = readCookie("_fbp") || "";
-  const fbc = readCookie("_fbc") || "";
+  function setCookie(name, value, days) {
+    if (!value) return;
+    const date = new Date();
+    date.setTime(date.getTime() + days * 24 * 60 * 60 * 1000);
+    document.cookie = name + "=" + encodeURIComponent(value) + "; expires=" + date.toUTCString() + "; path=/";
+  }
 
-  const base = "https://virtu.as.me/schedule.php?owner=XXXXXX";
+  function getParam(name) {
+    return new URLSearchParams(window.location.search).get(name);
+  }
 
-  const F_VA = 111;
-  const F_GCLID = 112;
-  const F_TTCLID = 113;
-  const F_FBP = 114;
-  const F_FBC = 115;
+  function getParamOrCookie(name, days) {
+    const param = getParam(name);
+    if (param) {
+      setCookie(name, param, days);
+      return param;
+    }
+    return readCookie(name);
+  }
 
-  const u = new URL(base);
-  u.searchParams.set("field:" + F_VA, va_attrib);
-  if (fbp) u.searchParams.set("field:" + F_FBP, fbp);
-  if (fbc) u.searchParams.set("field:" + F_FBC, fbc);
+  function getGAIds(timeoutMs) {
+    return new Promise(resolve => {
+      if (typeof window.gtag !== "function") {
+        resolve({ clientId: null, sessionId: null });
+        return;
+      }
+      let clientId = null;
+      let sessionId = null;
+      let gotClient = false;
+      let gotSession = false;
+      const finish = () => resolve({ clientId, sessionId });
+      const timer = setTimeout(finish, timeoutMs);
 
-  const iframe = document.createElement("iframe");
-  iframe.src = u.toString();
-  iframe.width = "100%";
-  iframe.height = "900";
-  iframe.style.border = "0";
-  iframe.loading = "lazy";
+      window.gtag("get", GA_MEASUREMENT_ID, "client_id", id => {
+        clientId = id || null;
+        gotClient = true;
+        if (gotSession) {
+          clearTimeout(timer);
+          finish();
+        }
+      });
+      window.gtag("get", GA_MEASUREMENT_ID, "session_id", id => {
+        sessionId = id || null;
+        gotSession = true;
+        if (gotClient) {
+          clearTimeout(timer);
+          finish();
+        }
+      });
+    });
+  }
 
-  document.getElementById("acuity-embed").appendChild(iframe);
+  async function buildEmbed() {
+    const url = new URL("https://app.acuityscheduling.com/schedule.php");
+    url.searchParams.set("owner", ACUITY_OWNER_ID);
+
+    Object.keys(fieldMap).forEach(key => {
+      const value = getParamOrCookie(key, 7);
+      if (value) url.searchParams.set(fieldMap[key], value);
+    });
+
+    const ga = await getGAIds(1200);
+    if (ga.clientId) url.searchParams.set("clientId", ga.clientId);
+    if (ga.sessionId) url.searchParams.set("sessionId", ga.sessionId);
+
+    const iframe = document.createElement("iframe");
+    iframe.src = url.toString();
+    iframe.title = "Schedule Appointment";
+    iframe.width = "100%";
+    iframe.height = "900";
+    iframe.style.border = "0";
+    iframe.loading = "lazy";
+
+    document.getElementById("acuity-embed").appendChild(iframe);
+
+    const embedScript = document.createElement("script");
+    embedScript.src = "https://embed.acuityscheduling.com/js/embed.js";
+    embedScript.async = true;
+    document.body.appendChild(embedScript);
+  }
+
+  window.addEventListener("message", function (event) {
+    if (event.data === "appointmentScheduled") {
+      window.dataLayer = window.dataLayer || [];
+      window.dataLayer.push({ event: "appointmentScheduled" });
+    }
+  });
+
+  buildEmbed();
 })();
 </script>
 ```
@@ -180,15 +272,18 @@ The Acuity iframe cannot read cookies because it is on `*.as.me`, so we pass the
 Notes:
 - `va_attrib` is a readable cookie so it can be passed into the iframe.
 - `va_vid` and `va_sid` are httpOnly and stay server-only.
+- The numeric `field:*` IDs must match the Acuity intake field IDs you configured (and should align with `ACUITY_FIELD_*` in env for the backend).
+- If you do not need GA client/session IDs, remove the `gtag` bits and keep the rest.
+- If you do not want Acuity's auto-resizing behavior, remove the `embed.js` injection block.
 
 ## Acuity setup
 
 1) Create intake fields for the trial appointment type:
 - `va_attrib` (text)
-- `gclid` (text)
-- `ttclid` (text)
-- `_fbp` (text)
-- `_fbc` (text)
+- optional: `utm_source`, `utm_medium`, `utm_term`, `utm_campaign`
+- optional: `gclid`, `fbclid`, `awc`, `ua`
+- optional: `sref_id`, `sscid` (if you want to pass these through directly)
+- optional: `ttclid`, `fbp`, `fbc` (only if you extend the script)
 - optional: `va_vid`, `va_sid` (debug)
 
 2) Hide the fields using Acuity CSS or keep them in an optional "Additional info" step.
@@ -211,10 +306,11 @@ Meta CAPI:
 - `fbc` and `fbp` are used when present.
 
 Google Ads:
-- v1 is stubbed. The intention is to use `UploadClickConversions` with:
-  - `gclid` / `gbraid` / `wbraid`
-  - enhanced conversions user identifiers (hashed email/phone, name)
-- IP and user agent are not required for click conversions but can be used in enhanced conversion flows depending on the integration approach.
+- Uses `UploadClickConversions` (enhanced conversions for leads).
+- Sends `gclid` / `gbraid` / `wbraid` when present plus hashed email/phone/name identifiers.
+- Sets `order_id`, `conversion_date_time` (configured timezone), and `partial_failure=true`.
+- Conversion action mapping uses `GOOGLE_ADS_CONVERSION_ACTIONS` (comma-separated `EVENT=ID`) with `GOOGLE_ADS_CONVERSION_ACTION_ID` fallback.
+- Populates consent when configured; skips uploads with no click IDs and no user identifiers.
 
 TikTok:
 - v1 is stubbed. Use Events API with event id for dedupe once implemented.
@@ -254,3 +350,14 @@ query ($appointmentId: ID!) {
 - The webhook provides the authoritative conversion moment.
 - The analytics app joins webhook -> attribution -> deliveries and logs everything.
 - Opus can reuse the same ingest + canonical event flow without iframe constraints.
+
+
+
+node scripts/google-ads-test-upload.mjs \
+    --gclid="PASTE_GCLID" \
+    --email="ben@virtu.academy" \
+    --phone="+13147692365" \
+    --value=0 \
+    --currency=USD \
+    --debug=true \
+    --validate-only=true
