@@ -80,22 +80,28 @@ export async function POST(req: NextRequest) {
         if (mockOutbound) {
           await mark({ status: "SUCCESS", responseBody: "mock_meta" });
         } else {
-          const metaEventName = ce.name === "TRIAL_BOOKED" ? "SubmitApplication" : "CustomEvent";
           const r = await sendMetaCapi({
-            eventName: metaEventName,
             eventId: ce.eventId,
+            eventName: ce.name,
             eventTime: ce.eventTime,
             eventSourceUrl,
+            email,
+            phone,
+            firstName: appt?.firstName ?? null,
+            lastName: appt?.lastName ?? null,
             ip,
             userAgent,
-            email,
-            phoneDigits: phone,
             fbc: appt?.fbc ?? attrib?.fbc ?? null,
             fbp: appt?.fbp ?? attrib?.fbp ?? null,
+            externalId: attrib?.token ?? null,
+            value: ce.value ?? null,
+            currency: ce.currency ?? null,
             customData: {
               appointment_id: ce.appointmentId,
+              appointment_type_id: appt?.appointmentTypeId ?? null,
               utm_campaign: attrib?.utmCampaign ?? null,
-              utm_source: attrib?.utmSource ?? null
+              utm_source: attrib?.utmSource ?? null,
+              utm_medium: attrib?.utmMedium ?? null
             }
           });
 
