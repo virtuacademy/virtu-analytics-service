@@ -14,10 +14,13 @@ POST https://business-api.tiktok.com/open_api/v1.3/event/track/
 ```
 
 ### Request Format
+*(Verified from [tiktok/gtm-template-eapi](https://github.com/tiktok/gtm-template-eapi) - TikTok's official GTM template)*
+
 ```json
 {
   "event_source": "web",
   "event_source_id": "<PIXEL_CODE>",
+  "partner_name": "VirtuAnalytics",
   "test_event_code": "<optional_for_testing>",
   "data": [
     {
@@ -26,6 +29,7 @@ POST https://business-api.tiktok.com/open_api/v1.3/event/track/
       "event_id": "unique-event-id",
       "user": {
         "ttclid": "click-id-from-url",
+        "ttp": "tiktok-pixel-cookie",
         "external_id": "hashed-external-id",
         "email": "hashed-email",
         "phone": "hashed-phone",
@@ -38,9 +42,7 @@ POST https://business-api.tiktok.com/open_api/v1.3/event/track/
       },
       "properties": {
         "currency": "USD",
-        "value": 0,
-        "content_type": "product",
-        "contents": []
+        "value": 0
       }
     }
   ]
@@ -322,6 +324,7 @@ export async function sendTikTokEvent(args: TikTokEventArgs): Promise<TikTokSend
   const request: Record<string, unknown> = {
     event_source: "web",
     event_source_id: authResult.pixelId,
+    partner_name: "VirtuAnalytics",
     data: [eventData]
   };
 
@@ -627,7 +630,17 @@ curl -X POST https://analytics.virtu.academy/api/test/tiktok \
 
 ## Sources
 
-- [TikTok Events API Overview](https://ads.tiktok.com/help/article/events-api)
-- [TikTok Standard Events](https://ads.tiktok.com/help/article/standard-events-parameters)
-- [Stape TikTok GTM Tag](https://github.com/stape-io/tiktok-tag)
-- [TikTok Conversion API Guide](https://funnel.io/blog/tiktok-conversion-api)
+### Primary Sources (Verified - Content Successfully Fetched)
+
+| Source | Type | What Was Extracted |
+|--------|------|-------------------|
+| [tiktok/gtm-template-eapi](https://github.com/tiktok/gtm-template-eapi) | **Official TikTok repo** | Complete request structure, event mapping, hashing logic, `partner_name` field |
+| [tiktok/tiktok-business-api-sdk](https://github.com/tiktok/tiktok-business-api-sdk) | **Official TikTok SDK** | Base URL, endpoint patterns, API version v1.3 |
+| [stape-io/tiktok-tag](https://github.com/stape-io/tiktok-tag) | Third-party GTM tag | Implementation reference, user data fields, cookie handling |
+| [VictorValar/python-tiktok-events-api](https://github.com/VictorValar/python-tiktok-events-api) | Third-party Python lib | Schema structure, Pydantic models |
+
+### Secondary Sources (Referenced but not directly fetched - 403 errors)
+
+- [TikTok Events API Overview](https://ads.tiktok.com/help/article/events-api) - Official docs (blocked)
+- [TikTok Standard Events](https://ads.tiktok.com/help/article/standard-events-parameters) - Official docs (blocked)
+- [TikTok Marketing API Docs](https://ads.tiktok.com/marketing_api/docs?id=1741601162187777) - Official API reference (blocked)
