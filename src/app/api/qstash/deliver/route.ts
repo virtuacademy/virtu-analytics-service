@@ -184,11 +184,36 @@ export async function POST(req: NextRequest) {
       }
 
       if (d.platform === "TIKTOK") {
-        const r = await sendTikTokEvent({
-          eventId: ce.eventId,
-          ttclid: appt?.ttclid ?? attrib?.ttclid ?? null
-        });
-        await mark({ status: r.skipped ? "SKIPPED" : "FAILED", responseBody: r.reason, requestBody: r.requestBody });
+        if (mockOutbound) {
+          await mark({ status: "SUCCESS", responseBody: "mock_tiktok" });
+        } else {
+          const r = await sendTikTokEvent({
+            eventId: ce.eventId,
+            eventName: ce.name,
+            eventTime: ce.eventTime,
+            conversionValue: ce.value ?? null,
+            currencyCode: ce.currency ?? null,
+            ttclid: appt?.ttclid ?? attrib?.ttclid ?? null,
+            email,
+            phone,
+            externalId: ce.attributionTok ?? null,
+            userIpAddress: ip,
+            userAgent: userAgent,
+            pageUrl: eventSourceUrl,
+            pageReferrer: attrib?.lastReferrer ?? null
+          });
+
+          if (r.skipped) {
+            await mark({ status: "SKIPPED", responseBody: r.reason, requestBody: r.requestBody });
+          } else {
+            await mark({
+              status: r.ok ? "SUCCESS" : "FAILED",
+              responseCode: r.status,
+              responseBody: r.body,
+              requestBody: r.requestBody
+            });
+          }
+        }
       }
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Unknown error";
