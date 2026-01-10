@@ -36,6 +36,8 @@ export async function POST(request: NextRequest) {
     // Generate session token
     const sessionToken = crypto.randomUUID();
     const isDev = process.env.NODE_ENV !== "production";
+    // Only set domain for production on the main domain, not preview deployments
+    const isVercelPreview = process.env.VERCEL_ENV === "preview";
     const cookieDomain = process.env.COOKIE_DOMAIN ?? ".virtu.academy";
 
     const res = NextResponse.json({ success: true });
@@ -47,7 +49,8 @@ export async function POST(request: NextRequest) {
       sameSite: "lax",
       path: "/",
       maxAge: SESSION_MAX_AGE,
-      domain: isDev ? undefined : cookieDomain,
+      // Don't set domain for dev or Vercel preview deployments
+      domain: isDev || isVercelPreview ? undefined : cookieDomain,
     });
 
     return res;
@@ -58,6 +61,7 @@ export async function POST(request: NextRequest) {
 
 export async function DELETE() {
   const isDev = process.env.NODE_ENV !== "production";
+  const isVercelPreview = process.env.VERCEL_ENV === "preview";
   const cookieDomain = process.env.COOKIE_DOMAIN ?? ".virtu.academy";
 
   const res = NextResponse.json({ success: true });
@@ -69,7 +73,7 @@ export async function DELETE() {
     sameSite: "lax",
     path: "/",
     maxAge: 0,
-    domain: isDev ? undefined : cookieDomain,
+    domain: isDev || isVercelPreview ? undefined : cookieDomain,
   });
 
   return res;
