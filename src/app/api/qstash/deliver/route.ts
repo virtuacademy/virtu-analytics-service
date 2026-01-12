@@ -50,6 +50,7 @@ export async function POST(req: NextRequest) {
     : null;
 
   const eventSourceUrl = attrib?.lastUrl ?? "https://virtu.academy";
+  const eventId = ce.appointmentId ?? ce.eventId;
   const email = appt?.email ?? null;
   const phone = appt?.phone ?? null;
   const ip = session?.ipFirst ?? null;
@@ -83,22 +84,28 @@ export async function POST(req: NextRequest) {
         if (mockOutbound) {
           await mark({ status: "SUCCESS", responseBody: "mock_meta" });
         } else {
-          const metaEventName = ce.name === "TRIAL_BOOKED" ? "SubmitApplication" : "CustomEvent";
           const r = await sendMetaCapi({
-            eventName: metaEventName,
-            eventId: ce.eventId,
+            eventId,
+            eventName: ce.name,
             eventTime: ce.eventTime,
             eventSourceUrl,
+            email,
+            phone,
+            firstName: appt?.firstName ?? null,
+            lastName: appt?.lastName ?? null,
             ip,
             userAgent,
-            email,
-            phoneDigits: phone,
             fbc: appt?.fbc ?? attrib?.fbc ?? null,
             fbp: appt?.fbp ?? attrib?.fbp ?? null,
+            externalId: attrib?.token ?? null,
+            value: ce.value ?? null,
+            currency: ce.currency ?? null,
             customData: {
               appointment_id: ce.appointmentId,
+              appointment_type_id: appt?.appointmentTypeId ?? null,
               utm_campaign: attrib?.utmCampaign ?? null,
               utm_source: attrib?.utmSource ?? null,
+              utm_medium: attrib?.utmMedium ?? null,
             },
           });
 
@@ -159,7 +166,7 @@ export async function POST(req: NextRequest) {
           await mark({ status: "SUCCESS", responseBody: "mock_google_ads" });
         } else {
           const r = await sendGoogleAdsClickConversion({
-            eventId: ce.eventId,
+            eventId,
             eventName: ce.name,
             eventTime: ce.eventTime,
             conversionValue: ce.value ?? null,
@@ -188,7 +195,7 @@ export async function POST(req: NextRequest) {
 
       if (d.platform === "TIKTOK") {
         const r = await sendTikTokEvent({
-          eventId: ce.eventId,
+          eventId,
           ttclid: appt?.ttclid ?? attrib?.ttclid ?? null,
         });
         await mark({
