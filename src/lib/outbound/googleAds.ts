@@ -104,6 +104,13 @@ function normalizePhoneToE164(value: string, defaultCountryCode?: string | null)
   if (!digitsOnly) return null;
   const countryCode = normalizeCountryCode(defaultCountryCode);
   if (!countryCode) return null;
+  if (digitsOnly.startsWith(countryCode)) {
+    const normalized = `+${digitsOnly}`;
+    const len = normalized.replace(/\D+/g, "").length;
+    if (len >= 8 && len <= 15 && (countryCode !== "1" || digitsOnly.length === 11)) {
+      return normalized;
+    }
+  }
   const normalized = `+${countryCode}${digitsOnly}`;
   const len = normalized.replace(/\D+/g, "").length;
   return len >= 8 && len <= 15 ? normalized : null;
@@ -353,7 +360,7 @@ export async function sendGoogleAdsClickConversion(args: GoogleAdsClickConversio
     }
   }
 
-  const orderId = args.orderId ?? (args.eventName ? `${args.eventId}_${args.eventName}` : args.eventId);
+  const orderId = args.orderId ?? args.eventId;
   if (orderId) conversion.orderId = orderId;
   if (gclid) conversion.gclid = gclid;
   if (gbraid) conversion.gbraid = gbraid;
