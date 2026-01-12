@@ -1,7 +1,7 @@
 import { Client } from "@upstash/qstash";
 
 export const qstash = new Client({
-  token: process.env.QSTASH_TOKEN || ""
+  token: process.env.QSTASH_TOKEN || "",
 });
 
 export async function enqueueDelivery(canonicalEventId: string) {
@@ -12,6 +12,6 @@ export async function enqueueDelivery(canonicalEventId: string) {
   const url = `${process.env.PUBLIC_BASE_URL}/api/qstash/deliver`;
   await qstash.publishJSON({
     url,
-    body: { canonicalEventId }
+    body: { canonicalEventId },
   });
 }

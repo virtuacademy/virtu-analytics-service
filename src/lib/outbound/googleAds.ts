@@ -55,8 +55,11 @@ function normalizeForHash(value: string): string {
 }
 
 function extractEmailCandidate(value: string): string | null {
-  const candidates = value.split(/[,\s;]/).map(part => part.trim()).filter(Boolean);
-  return candidates.find(candidate => candidate.includes("@")) ?? null;
+  const candidates = value
+    .split(/[,\s;]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return candidates.find((candidate) => candidate.includes("@")) ?? null;
 }
 
 function normalizeEmailForHash(value: string): string | null {
@@ -140,7 +143,7 @@ function getOffsetMinutesForTimeZone(date: Date, timeZone?: string | null): numb
   try {
     const formatter = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "shortOffset" });
     const parts = formatter.formatToParts(date);
-    const tzName = parts.find(part => part.type === "timeZoneName")?.value ?? "";
+    const tzName = parts.find((part) => part.type === "timeZoneName")?.value ?? "";
     if (tzName === "GMT" || tzName === "UTC") return 0;
     const match = tzName.match(/GMT([+-]\d{1,2})(?::(\d{2}))?/);
     if (!match) return null;
@@ -162,8 +165,13 @@ function formatOffsetMinutes(offsetMinutes: number): string {
   return `${sign}${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
-function formatGoogleAdsDateTime(date: Date, timeZone?: string | null, offsetOverride?: string | null): string {
-  const offsetMinutes = parseOffsetMinutes(offsetOverride) ?? getOffsetMinutesForTimeZone(date, timeZone) ?? 0;
+function formatGoogleAdsDateTime(
+  date: Date,
+  timeZone?: string | null,
+  offsetOverride?: string | null,
+): string {
+  const offsetMinutes =
+    parseOffsetMinutes(offsetOverride) ?? getOffsetMinutesForTimeZone(date, timeZone) ?? 0;
   const local = new Date(date.getTime() + offsetMinutes * 60 * 1000);
   const y = local.getUTCFullYear();
   const m = String(local.getUTCMonth() + 1).padStart(2, "0");
@@ -178,13 +186,14 @@ function isClickNotFoundOnly(partialFailureError: unknown): boolean {
   if (!partialFailureError || typeof partialFailureError !== "object") return false;
   const details = (partialFailureError as { details?: unknown }).details;
   if (!Array.isArray(details)) return false;
-  const errors = details.flatMap(detail => {
+  const errors = details.flatMap((detail) => {
     const nested = (detail as { errors?: unknown }).errors;
     return Array.isArray(nested) ? nested : [];
   });
   if (errors.length === 0) return false;
-  return errors.every(error => {
-    const code = (error as { errorCode?: { conversionUploadError?: string } }).errorCode?.conversionUploadError;
+  return errors.every((error) => {
+    const code = (error as { errorCode?: { conversionUploadError?: string } }).errorCode
+      ?.conversionUploadError;
     return code === "CLICK_NOT_FOUND";
   });
 }
@@ -193,7 +202,7 @@ function parseConversionActionMap(value?: string | null): Record<string, string>
   if (!value) return {};
   const map: Record<string, string> = {};
   for (const pair of value.split(",")) {
-    const [eventName, actionId] = pair.split("=").map(part => part.trim());
+    const [eventName, actionId] = pair.split("=").map((part) => part.trim());
     if (eventName && actionId) map[eventName] = actionId;
   }
   return map;
@@ -240,8 +249,8 @@ function buildAuth(): { ok: true; auth: GoogleAdsAuth } | { ok: false; reason: s
       clientSecret,
       refreshToken,
       customerId,
-      loginCustomerId: loginCustomerId ?? undefined
-    }
+      loginCustomerId: loginCustomerId ?? undefined,
+    },
   };
 }
 
@@ -256,14 +265,14 @@ async function fetchAccessToken(auth: GoogleAdsAuth): Promise<string> {
       client_id: auth.clientId,
       client_secret: auth.clientSecret,
       refresh_token: auth.refreshToken,
-      grant_type: "refresh_token"
+      grant_type: "refresh_token",
     });
 
     const res = await fetch(OAUTH_TOKEN_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: params.toString(),
-      cache: "no-store"
+      cache: "no-store",
     });
 
     const text = await res.text();
@@ -314,12 +323,14 @@ function buildUserIdentifiers(args: GoogleAdsClickConversionArgs) {
 function buildConsent() {
   const consent: Record<string, ConsentStatus> = {
     adUserData: "GRANTED",
-    adPersonalization: "GRANTED"
+    adPersonalization: "GRANTED",
   };
   return consent;
 }
 
-export async function sendGoogleAdsClickConversion(args: GoogleAdsClickConversionArgs): Promise<GoogleAdsSendResult> {
+export async function sendGoogleAdsClickConversion(
+  args: GoogleAdsClickConversionArgs,
+): Promise<GoogleAdsSendResult> {
   if (process.env.OUTBOUND_MODE === "mock") {
     return { skipped: true, reason: "GOOGLE_ADS mock mode" };
   }
@@ -350,7 +361,7 @@ export async function sendGoogleAdsClickConversion(args: GoogleAdsClickConversio
   const conversion: Record<string, unknown> = {
     conversionAction,
     conversionDateTime,
-    conversionEnvironment: "WEB"
+    conversionEnvironment: "WEB",
   };
 
   if (args.conversionValue != null && Number.isFinite(args.conversionValue)) {
@@ -367,17 +378,14 @@ export async function sendGoogleAdsClickConversion(args: GoogleAdsClickConversio
   if (wbraid) conversion.wbraid = wbraid;
   if (identifiers.length > 0) conversion.userIdentifiers = identifiers;
   if (args.userIpAddress) conversion.userIpAddress = args.userIpAddress;
-  //TODO: If it's a new customer, "customerType":"NEW"
-  //TODO: Add sessionAttributes (https://developers.google.com/google-ads/api/reference/rpc/v22/ConversionUploadService/UploadClickConversions?transport=rest#SessionAttributeKeyValuePair)
-  //TODO: set conversion values and order ID too.
-  //TODO: add filter for no scheduledby field 
+
   const consent = buildConsent();
   if (consent) conversion.consent = consent;
 
   const request: Record<string, unknown> = {
     customerId,
     conversions: [conversion],
-    partialFailure: true
+    partialFailure: true,
   };
 
   const jobId = parseJobId(process.env.GOOGLE_ADS_JOB_ID);
@@ -397,7 +405,7 @@ export async function sendGoogleAdsClickConversion(args: GoogleAdsClickConversio
   const headers: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
     "developer-token": authResult.auth.developerToken,
-    "Content-Type": "application/json"
+    "Content-Type": "application/json",
   };
   if (authResult.auth.loginCustomerId) {
     headers["login-customer-id"] = authResult.auth.loginCustomerId;
@@ -407,7 +415,7 @@ export async function sendGoogleAdsClickConversion(args: GoogleAdsClickConversio
     method: "POST",
     headers,
     body: requestBody,
-    cache: "no-store"
+    cache: "no-store",
   });
 
   const text = await res.text();

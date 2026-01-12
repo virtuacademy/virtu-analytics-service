@@ -47,9 +47,9 @@ export async function sendMetaCapi(args: {
         action_source: "website",
         event_source_url: args.eventSourceUrl,
         user_data,
-        custom_data: args.customData ?? {}
-      }
-    ]
+        custom_data: args.customData ?? {},
+      },
+    ],
   };
   const requestBody = JSON.stringify(payload);
 
@@ -58,7 +58,7 @@ export async function sendMetaCapi(args: {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: requestBody,
-    cache: "no-store"
+    cache: "no-store",
   });
 
   const text = await res.text();

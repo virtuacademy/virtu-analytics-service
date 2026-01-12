@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 
 const TRIAL_APPOINTMENT_TYPES = (process.env.ACUITY_TRIAL_APPOINTMENT_TYPE_IDS ?? "")
   .split(",")
-  .map(id => id.trim())
+  .map((id) => id.trim())
   .filter(Boolean);
 
 type SearchParams = {
@@ -19,11 +19,7 @@ type SearchParams = {
   appt?: string;
 };
 
-export default async function Home({
-  searchParams
-}: {
-  searchParams?: Promise<SearchParams>;
-}) {
+export default async function Home({ searchParams }: { searchParams?: Promise<SearchParams> }) {
   noStore();
   const resolvedSearchParams = await searchParams;
   const selectedAppointmentId =
@@ -34,7 +30,7 @@ export default async function Home({
   // Fetch all appointments - filtering is handled client-side for better UX
   const appointments = await prisma.appointment.findMany({
     orderBy: { updatedAt: "desc" },
-    take: 50
+    take: 50,
   });
 
   const selectedAppointment = selectedAppointmentId
@@ -52,13 +48,13 @@ export default async function Home({
 
   const attributions = await prisma.attribution.findMany({
     orderBy: { lastTouchAt: "desc" },
-    take: 25
+    take: 25,
   });
 
   const canonicalEvents = await prisma.canonicalEvent.findMany({
     orderBy: { createdAt: "desc" },
     take: 25,
-    include: { deliveries: true }
+    include: { deliveries: true },
   });
 
   return (
@@ -70,7 +66,8 @@ export default async function Home({
             Virtu Analytics
           </h1>
           <p className="text-sm text-zinc-400 max-w-2xl">
-            Real-time insights into appointments, attribution tracking, and event delivery across all platforms.
+            Real-time insights into appointments, attribution tracking, and event delivery across
+            all platforms.
           </p>
         </header>
 

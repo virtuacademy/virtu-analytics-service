@@ -73,7 +73,7 @@ export const resolvers = {
       prisma.canonicalEvent.findMany({
         where: { appointmentId: args.appointmentId },
         orderBy: { createdAt: "desc" },
-        include: { deliveries: true }
-      })
-  }
+        include: { deliveries: true },
+      }),
+  },
 };

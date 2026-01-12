@@ -35,7 +35,12 @@ const FILTER_OPTIONS = [
     label: "All",
     icon: (
       <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M4 6h16M4 10h16M4 14h16M4 18h16"
+        />
       </svg>
     ),
   },
@@ -44,7 +49,12 @@ const FILTER_OPTIONS = [
     label: "Trial Only",
     icon: (
       <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+        />
       </svg>
     ),
   },
@@ -53,7 +63,12 @@ const FILTER_OPTIONS = [
     label: "Leads Only",
     icon: (
       <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+        />
       </svg>
     ),
   },
@@ -82,13 +97,12 @@ export function AppointmentsSection({
     switch (filter) {
       case "trial":
         return appointments.filter(
-          (appt) => appt.appointmentTypeId && trialAppointmentTypes.includes(appt.appointmentTypeId)
+          (appt) =>
+            appt.appointmentTypeId && trialAppointmentTypes.includes(appt.appointmentTypeId),
         );
       case "leads":
         // Leads only: scheduledBy is blank/null (self-scheduled)
-        return appointments.filter(
-          (appt) => !appt.scheduledBy || appt.scheduledBy.trim() === ""
-        );
+        return appointments.filter((appt) => !appt.scheduledBy || appt.scheduledBy.trim() === "");
       default:
         return appointments;
     }
@@ -113,7 +127,7 @@ export function AppointmentsSection({
       const newUrl = params.toString() ? `/?${params.toString()}` : "/";
       router.push(newUrl, { scroll: false });
     },
-    [router, searchParams]
+    [router, searchParams],
   );
 
   // Handle appointment selection
@@ -123,7 +137,7 @@ export function AppointmentsSection({
       params.set("appt", appointmentId);
       router.push(`/?${params.toString()}`, { scroll: false });
     },
-    [router, searchParams]
+    [router, searchParams],
   );
 
   return (
@@ -135,8 +149,18 @@ export function AppointmentsSection({
           className="group flex items-center gap-2"
         >
           <h2 className="text-2xl font-semibold flex items-center gap-2">
-            <svg className="w-5 h-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            <svg
+              className="w-5 h-5 text-blue-400"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+              />
             </svg>
             Appointments
           </h2>
@@ -171,8 +195,18 @@ export function AppointmentsSection({
         <div className="overflow-auto rounded-2xl border border-zinc-800 bg-zinc-900/30 backdrop-blur-sm animate-in slide-in-from-top-4 duration-300">
           {filteredAppointments.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 px-4">
-              <svg className="w-12 h-12 text-zinc-600 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              <svg
+                className="w-12 h-12 text-zinc-600 mb-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                />
               </svg>
               <p className="text-sm text-zinc-400 text-center">
                 No appointments found for the selected filter.
@@ -188,17 +222,39 @@ export function AppointmentsSection({
             <table className="w-full text-left text-sm">
               <thead className="bg-gradient-to-r from-zinc-900 to-zinc-900/80 sticky top-0 z-10">
                 <tr className="border-b border-zinc-800">
-                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">ID</th>
-                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">Type</th>
-                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">Scheduled By</th>
-                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">Status</th>
-                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">Email</th>
-                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">Phone</th>
-                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">VA Attrib</th>
-                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">GCLID</th>
-                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">TTCLID</th>
-                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">Updated</th>
-                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">Action</th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                    ID
+                  </th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                    Type
+                  </th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                    Scheduled By
+                  </th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                    Status
+                  </th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                    Email
+                  </th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                    Phone
+                  </th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                    VA Attrib
+                  </th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                    GCLID
+                  </th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                    TTCLID
+                  </th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                    Updated
+                  </th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                    Action
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800/50">
@@ -212,7 +268,9 @@ export function AppointmentsSection({
                       }`}
                     >
                       <td className="px-4 py-3 font-mono text-xs text-blue-400">{appt.id}</td>
-                      <td className="px-4 py-3 text-xs text-zinc-200">{appt.appointmentTypeId ?? "-"}</td>
+                      <td className="px-4 py-3 text-xs text-zinc-200">
+                        {appt.appointmentTypeId ?? "-"}
+                      </td>
                       <td className="px-4 py-3 text-xs text-zinc-200">
                         {appt.scheduledBy ? (
                           <span className="inline-flex items-center gap-1">
@@ -233,9 +291,15 @@ export function AppointmentsSection({
                       </td>
                       <td className="px-4 py-3 text-xs text-zinc-300">{appt.email ?? "-"}</td>
                       <td className="px-4 py-3 text-xs text-zinc-300">{appt.phone ?? "-"}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-purple-400">{appt.vaAttrib ?? "-"}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-zinc-400">{appt.gclid ?? "-"}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-zinc-400">{appt.ttclid ?? "-"}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-purple-400">
+                        {appt.vaAttrib ?? "-"}
+                      </td>
+                      <td className="px-4 py-3 font-mono text-xs text-zinc-400">
+                        {appt.gclid ?? "-"}
+                      </td>
+                      <td className="px-4 py-3 font-mono text-xs text-zinc-400">
+                        {appt.ttclid ?? "-"}
+                      </td>
                       <td className="px-4 py-3 text-[11px] text-zinc-500">
                         {appt.updatedAt.toISOString()}
                       </td>
@@ -245,8 +309,18 @@ export function AppointmentsSection({
                           className="group inline-flex items-center gap-1 text-xs text-blue-400 transition-colors hover:text-blue-300"
                         >
                           <span>View</span>
-                          <svg className="h-3 w-3 transition-transform group-hover:translate-x-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          <svg
+                            className="h-3 w-3 transition-transform group-hover:translate-x-0.5"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M9 5l7 7-7 7"
+                            />
                           </svg>
                         </button>
                       </td>

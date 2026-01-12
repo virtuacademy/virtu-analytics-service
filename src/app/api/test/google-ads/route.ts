@@ -5,7 +5,9 @@ export const runtime = "nodejs";
 
 function getTestSecret(req: NextRequest): string | null {
   const headerSecret =
-    req.headers.get("x-google-ads-test-secret") ?? req.headers.get("x-test-secret") ?? req.headers.get("authorization");
+    req.headers.get("x-google-ads-test-secret") ??
+    req.headers.get("x-test-secret") ??
+    req.headers.get("authorization");
   if (headerSecret) {
     if (headerSecret.toLowerCase().startsWith("bearer ")) {
       return headerSecret.slice("bearer ".length).trim();
@@ -38,7 +40,10 @@ function parseNumber(value: unknown): number | null {
 export async function POST(req: NextRequest) {
   const secret = process.env.GOOGLE_ADS_TEST_SECRET;
   if (!secret) {
-    return NextResponse.json({ ok: false, error: "Missing GOOGLE_ADS_TEST_SECRET" }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: "Missing GOOGLE_ADS_TEST_SECRET" },
+      { status: 500 },
+    );
   }
 
   const provided = getTestSecret(req);
@@ -56,12 +61,21 @@ export async function POST(req: NextRequest) {
     body = {};
   }
 
-  const eventId = typeof body.eventId === "string" && body.eventId.trim() ? body.eventId.trim() : `test-${Date.now()}`;
-  const eventName = typeof body.eventName === "string" && body.eventName.trim() ? body.eventName.trim() : "TRIAL_BOOKED";
+  const eventId =
+    typeof body.eventId === "string" && body.eventId.trim()
+      ? body.eventId.trim()
+      : `test-${Date.now()}`;
+  const eventName =
+    typeof body.eventName === "string" && body.eventName.trim()
+      ? body.eventName.trim()
+      : "TRIAL_BOOKED";
   const eventTimeValue = body.eventTime ?? body.conversionDateTime;
   const parsedEventTime = parseDate(eventTimeValue);
   if (eventTimeValue && !parsedEventTime) {
-    return NextResponse.json({ ok: false, error: "Invalid eventTime/conversionDateTime" }, { status: 400 });
+    return NextResponse.json(
+      { ok: false, error: "Invalid eventTime/conversionDateTime" },
+      { status: 400 },
+    );
   }
 
   const result = await sendGoogleAdsClickConversion({
@@ -77,7 +91,7 @@ export async function POST(req: NextRequest) {
     phone: typeof body.phone === "string" ? body.phone.trim() : undefined,
     firstName: typeof body.firstName === "string" ? body.firstName.trim() : undefined,
     lastName: typeof body.lastName === "string" ? body.lastName.trim() : undefined,
-    orderId: typeof body.orderId === "string" ? body.orderId.trim() : undefined
+    orderId: typeof body.orderId === "string" ? body.orderId.trim() : undefined,
   });
 
   if (result.skipped) {
