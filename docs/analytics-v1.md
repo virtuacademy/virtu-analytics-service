@@ -5,7 +5,7 @@
 - Add support for trial vs regular bookings (all track). 
 - Google ads: set new vs. old customer data for conversions. 
 - Session data for google ads conversion stuff
-- Add cart-data
+- Add cart-data for google
 ## Overview
 
 This service is the source of truth for attribution and conversions across Webflow + Acuity today and the Opus app later.
