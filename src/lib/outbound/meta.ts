@@ -79,7 +79,7 @@ function parseEventNameMap(value?: string | null): Record<string, string> {
   if (!value) return {};
   const map: Record<string, string> = {};
   for (const pair of value.split(",")) {
-    const [eventName, metaEvent] = pair.split("=").map(part => part.trim());
+    const [eventName, metaEvent] = pair.split("=").map((part) => part.trim());
     if (eventName && metaEvent) map[eventName] = metaEvent;
   }
   return map;
@@ -94,11 +94,9 @@ function resolveMetaEventName(canonicalEventName?: string | null): string {
     TRIAL_BOOKED: "SubmitApplication",
     TRIAL_RESCHEDULED: "Schedule",
     TRIAL_CANCELED: "Cancel",
-    APPOINTMENT_UPDATED: "Schedule"
+    APPOINTMENT_UPDATED: "Schedule",
   };
-  return canonicalEventName && defaults[canonicalEventName]
-    ? defaults[canonicalEventName]
-    : "Lead";
+  return canonicalEventName && defaults[canonicalEventName] ? defaults[canonicalEventName] : "Lead";
 }
 
 // --- Normalization Functions ---
@@ -108,8 +106,11 @@ function normalizeForHash(value: string): string {
 }
 
 function extractEmailCandidate(value: string): string | null {
-  const candidates = value.split(/[,\s;]/).map(part => part.trim()).filter(Boolean);
-  return candidates.find(candidate => candidate.includes("@")) ?? null;
+  const candidates = value
+    .split(/[,\s;]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return candidates.find((candidate) => candidate.includes("@")) ?? null;
 }
 
 function normalizeEmailForMeta(value?: string | null): string | null {
@@ -136,7 +137,10 @@ function normalizeCountryCode(value?: string | null): string | null {
   return digits ? digits : null;
 }
 
-function normalizePhoneForMeta(value?: string | null, defaultCountryCode?: string | null): string | null {
+function normalizePhoneForMeta(
+  value?: string | null,
+  defaultCountryCode?: string | null,
+): string | null {
   if (!value) return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -165,14 +169,20 @@ function normalizePhoneForMeta(value?: string | null, defaultCountryCode?: strin
 function normalizeNameForMeta(value?: string | null): string | null {
   if (!value) return null;
   // Lowercase, letters only (a-z)
-  const normalized = value.trim().toLowerCase().replace(/[^a-z]/g, "");
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z]/g, "");
   return normalized.length > 0 ? normalized : null;
 }
 
 function normalizeStateForMeta(value?: string | null): string | null {
   if (!value) return null;
   // 2-letter state code, lowercase
-  const normalized = value.trim().toLowerCase().replace(/[^a-z]/g, "");
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z]/g, "");
   return normalized.length === 2 ? normalized : null;
 }
 
@@ -186,14 +196,20 @@ function normalizeZipForMeta(value?: string | null): string | null {
 function normalizeCountryForMeta(value?: string | null): string | null {
   if (!value) return null;
   // 2-letter country code, lowercase
-  const normalized = value.trim().toLowerCase().replace(/[^a-z]/g, "");
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z]/g, "");
   return normalized.length === 2 ? normalized : null;
 }
 
 function normalizeCityForMeta(value?: string | null): string | null {
   if (!value) return null;
   // Lowercase, letters only, no spaces
-  const normalized = value.trim().toLowerCase().replace(/[^a-z]/g, "");
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z]/g, "");
   return normalized.length > 0 ? normalized : null;
 }
 
@@ -274,8 +290,8 @@ function buildDataProcessingOptions(): {
   if (lduEnabled) {
     return {
       data_processing_options: ["LDU"],
-      data_processing_options_country: 1,  // US
-      data_processing_options_state: 1000  // California
+      data_processing_options_country: 1, // US
+      data_processing_options_state: 1000, // California
     };
   }
   return { data_processing_options: [] };
@@ -310,11 +326,11 @@ export async function sendMetaCapi(args: MetaCapiArgs): Promise<MetaCapiResult> 
     event_source_url: args.eventSourceUrl,
     user_data: userData,
     custom_data: customData,
-    ...dataProcessingOptions
+    ...dataProcessingOptions,
   };
 
   const payload: Record<string, unknown> = {
-    data: [eventData]
+    data: [eventData],
   };
 
   // Add test event code if configured (for Events Manager debugging)
@@ -353,6 +369,6 @@ export async function sendMetaCapi(args: MetaCapiArgs): Promise<MetaCapiResult> 
     ok,
     status: res.status,
     body: parsed ? JSON.stringify(parsed) : text,
-    requestBody
+    requestBody,
   };
 }

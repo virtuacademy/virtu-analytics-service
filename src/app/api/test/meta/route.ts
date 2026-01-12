@@ -5,7 +5,9 @@ export const runtime = "nodejs";
 
 function getTestSecret(req: NextRequest): string | null {
   const headerSecret =
-    req.headers.get("x-meta-test-secret") ?? req.headers.get("x-test-secret") ?? req.headers.get("authorization");
+    req.headers.get("x-meta-test-secret") ??
+    req.headers.get("x-test-secret") ??
+    req.headers.get("authorization");
   if (headerSecret) {
     if (headerSecret.toLowerCase().startsWith("bearer ")) {
       return headerSecret.slice("bearer ".length).trim();
@@ -38,7 +40,10 @@ function parseNumber(value: unknown): number | null {
 export async function POST(req: NextRequest) {
   const secret = process.env.META_CAPI_TEST_SECRET;
   if (!secret) {
-    return NextResponse.json({ ok: false, error: "Missing META_CAPI_TEST_SECRET" }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: "Missing META_CAPI_TEST_SECRET" },
+      { status: 500 },
+    );
   }
 
   const provided = getTestSecret(req);
@@ -56,17 +61,24 @@ export async function POST(req: NextRequest) {
     body = {};
   }
 
-  const eventId = typeof body.eventId === "string" && body.eventId.trim() ? body.eventId.trim() : `test-${Date.now()}`;
-  const eventName = typeof body.eventName === "string" && body.eventName.trim() ? body.eventName.trim() : "TRIAL_BOOKED";
+  const eventId =
+    typeof body.eventId === "string" && body.eventId.trim()
+      ? body.eventId.trim()
+      : `test-${Date.now()}`;
+  const eventName =
+    typeof body.eventName === "string" && body.eventName.trim()
+      ? body.eventName.trim()
+      : "TRIAL_BOOKED";
   const eventTimeValue = body.eventTime;
   const parsedEventTime = parseDate(eventTimeValue);
   if (eventTimeValue && !parsedEventTime) {
     return NextResponse.json({ ok: false, error: "Invalid eventTime" }, { status: 400 });
   }
 
-  const eventSourceUrl = typeof body.eventSourceUrl === "string" && body.eventSourceUrl.trim()
-    ? body.eventSourceUrl.trim()
-    : "https://virtu.academy";
+  const eventSourceUrl =
+    typeof body.eventSourceUrl === "string" && body.eventSourceUrl.trim()
+      ? body.eventSourceUrl.trim()
+      : "https://virtu.academy";
 
   const result = await sendMetaCapi({
     eventId,
@@ -87,7 +99,7 @@ export async function POST(req: NextRequest) {
     fbp: typeof body.fbp === "string" ? body.fbp.trim() : undefined,
     externalId: typeof body.externalId === "string" ? body.externalId.trim() : undefined,
     value: parseNumber(body.value),
-    currency: typeof body.currency === "string" ? body.currency.trim() : undefined
+    currency: typeof body.currency === "string" ? body.currency.trim() : undefined,
   });
 
   if (result.skipped) {
