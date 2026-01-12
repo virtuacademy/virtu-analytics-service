@@ -48,11 +48,7 @@ type AppointmentModalProps = {
   clearHref: string;
 };
 
-export function AppointmentModal({
-  appointment,
-  attribution,
-  clearHref,
-}: AppointmentModalProps) {
+export function AppointmentModal({ appointment, attribution, clearHref }: AppointmentModalProps) {
   const router = useRouter();
   const [attributionExpanded, setAttributionExpanded] = useState(false);
 
@@ -153,9 +149,7 @@ export function AppointmentModal({
                   Name
                 </dt>
                 <dd className="text-zinc-200">
-                  {[appointment.firstName, appointment.lastName]
-                    .filter(Boolean)
-                    .join(" ") || "-"}
+                  {[appointment.firstName, appointment.lastName].filter(Boolean).join(" ") || "-"}
                 </dd>
               </div>
               <div className="space-y-1 col-span-2">
@@ -182,25 +176,19 @@ export function AppointmentModal({
                 <dt className="text-zinc-500 text-[10px] uppercase tracking-wider font-medium">
                   GCLID
                 </dt>
-                <dd className="font-mono text-[11px] text-zinc-400">
-                  {appointment.gclid ?? "-"}
-                </dd>
+                <dd className="font-mono text-[11px] text-zinc-400">{appointment.gclid ?? "-"}</dd>
               </div>
               <div className="space-y-1">
                 <dt className="text-zinc-500 text-[10px] uppercase tracking-wider font-medium">
                   TTCLID
                 </dt>
-                <dd className="font-mono text-[11px] text-zinc-400">
-                  {appointment.ttclid ?? "-"}
-                </dd>
+                <dd className="font-mono text-[11px] text-zinc-400">{appointment.ttclid ?? "-"}</dd>
               </div>
               <div className="space-y-1 col-span-2">
                 <dt className="text-zinc-500 text-[10px] uppercase tracking-wider font-medium">
                   Last Updated
                 </dt>
-                <dd className="text-zinc-400 text-[11px]">
-                  {appointment.updatedAt.toISOString()}
-                </dd>
+                <dd className="text-zinc-400 text-[11px]">{appointment.updatedAt.toISOString()}</dd>
               </div>
             </dl>
           </div>
@@ -230,7 +218,12 @@ export function AppointmentModal({
                 viewBox="0 0 24 24"
                 stroke="currentColor"
               >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M19 9l-7 7-7-7"
+                />
               </svg>
             </button>
             {attribution ? (
