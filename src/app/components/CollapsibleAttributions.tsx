@@ -23,13 +23,14 @@ export function CollapsibleAttributions({
   attributions,
   selectedToken,
 }: CollapsibleAttributionsProps) {
-  const [isExpanded, setIsExpanded] = useState(true);
+  // Start collapsed by default for better UX - prevents unwanted expansion on filter changes
+  const [isExpanded, setIsExpanded] = useState(false);
 
   return (
     <section className="mb-12">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="group flex items-center gap-2 mb-6"
+        className="group flex items-center gap-2 mb-6 hover:opacity-80 transition-opacity"
       >
         <h2 className="text-2xl font-semibold flex items-center gap-2">
           <svg className="w-5 h-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -37,8 +38,11 @@ export function CollapsibleAttributions({
           </svg>
           Attributions
         </h2>
+        <span className="ml-2 text-xs text-zinc-500 font-normal">
+          {attributions.length} record{attributions.length !== 1 ? "s" : ""}
+        </span>
         <svg
-          className={`w-5 h-5 text-zinc-400 transition-transform ${
+          className={`w-5 h-5 text-zinc-400 transition-transform duration-200 ${
             isExpanded ? "rotate-180" : ""
           }`}
           fill="none"
