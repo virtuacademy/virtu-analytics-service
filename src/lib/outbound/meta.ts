@@ -1,7 +1,7 @@
 import { toUnixSeconds } from "../normalize";
 import { sha256Hex } from "../crypto";
 
-const META_CAPI_API_VERSION_DEFAULT = "v21.0";
+const META_CAPI_API_VERSION_DEFAULT = "v24.0";
 
 // --- Types ---
 
@@ -130,11 +130,30 @@ function normalizeEmailForMeta(value?: string | null): string | null {
   return `${local}@${domain}`;
 }
 
-function normalizePhoneForMeta(value?: string | null): string | null {
+function normalizeCountryCode(value?: string | null): string | null {
   if (!value) return null;
+  const digits = value.replace(/\D+/g, "");
+  return digits ? digits : null;
+}
+
+function normalizePhoneForMeta(value?: string | null, defaultCountryCode?: string | null): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
   // Meta requires digits only (no + prefix)
-  const digits = value.replace(/\D/g, "");
-  return digits.length >= 7 ? digits : null;
+  const plusDigits = trimmed.replace(/[^\d+]/g, "");
+  if (plusDigits.startsWith("+")) {
+    const digitsOnly = plusDigits.replace(/\D/g, "");
+    return digitsOnly.length >= 7 ? digitsOnly : null;
+  }
+
+  const digitsOnly = trimmed.replace(/\D/g, "");
+  if (!digitsOnly) return null;
+  const countryCode = normalizeCountryCode(defaultCountryCode);
+  if (!countryCode) return digitsOnly.length >= 7 ? digitsOnly : null;
+  const normalized = `${countryCode}${digitsOnly}`;
+  return normalized.length >= 7 ? normalized : null;
 }
 
 function normalizeNameForMeta(value?: string | null): string | null {
@@ -176,12 +195,13 @@ function normalizeCityForMeta(value?: string | null): string | null {
 
 function buildUserData(args: MetaCapiArgs): MetaUserData {
   const userData: MetaUserData = {};
+  const defaultCountryCode = process.env.GOOGLE_ADS_DEFAULT_PHONE_COUNTRY_CODE ?? null;
 
   // Hashed identifiers (all normalized then hashed)
   const email = normalizeEmailForMeta(args.email);
   if (email) userData.em = [sha256Hex(normalizeForHash(email))];
 
-  const phone = normalizePhoneForMeta(args.phone);
+  const phone = normalizePhoneForMeta(args.phone, defaultCountryCode);
   if (phone) userData.ph = [sha256Hex(phone)];
 
   const firstName = normalizeNameForMeta(args.firstName);
@@ -270,6 +290,9 @@ export async function sendMetaCapi(args: MetaCapiArgs): Promise<MetaCapiResult> 
   const { pixelId, accessToken, testEventCode, apiVersion } = authResult.auth;
   const metaEventName = resolveMetaEventName(args.eventName);
   const userData = buildUserData(args);
+  if (Object.keys(userData).length === 0) {
+    return { skipped: true, reason: "Missing user data" };
+  }
   const customData = buildCustomData(args);
   const dataProcessingOptions = buildDataProcessingOptions();
 

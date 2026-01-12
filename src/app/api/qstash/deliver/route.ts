@@ -47,6 +47,7 @@ export async function POST(req: NextRequest) {
     : null;
 
   const eventSourceUrl = attrib?.lastUrl ?? "https://virtu.academy";
+  const eventId = ce.appointmentId ?? ce.eventId;
   const email = appt?.email ?? null;
   const phone = appt?.phone ?? null;
   const ip = session?.ipFirst ?? null;
@@ -81,7 +82,7 @@ export async function POST(req: NextRequest) {
           await mark({ status: "SUCCESS", responseBody: "mock_meta" });
         } else {
           const r = await sendMetaCapi({
-            eventId: ce.eventId,
+            eventId,
             eventName: ce.name,
             eventTime: ce.eventTime,
             eventSourceUrl,
@@ -162,7 +163,7 @@ export async function POST(req: NextRequest) {
           await mark({ status: "SUCCESS", responseBody: "mock_google_ads" });
         } else {
           const r = await sendGoogleAdsClickConversion({
-            eventId: ce.eventId,
+            eventId,
             eventName: ce.name,
             eventTime: ce.eventTime,
             conversionValue: ce.value ?? null,
@@ -191,7 +192,7 @@ export async function POST(req: NextRequest) {
 
       if (d.platform === "TIKTOK") {
         const r = await sendTikTokEvent({
-          eventId: ce.eventId,
+          eventId,
           ttclid: appt?.ttclid ?? attrib?.ttclid ?? null
         });
         await mark({ status: r.skipped ? "SKIPPED" : "FAILED", responseBody: r.reason, requestBody: r.requestBody });
