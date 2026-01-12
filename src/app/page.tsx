@@ -30,7 +30,7 @@ export default async function Home({ searchParams }: { searchParams?: Promise<Se
   // Fetch all appointments - filtering is handled client-side for better UX
   const appointments = await prisma.appointment.findMany({
     orderBy: { updatedAt: "desc" },
-    take: 50,
+    take: 200,
   });
 
   const selectedAppointment = selectedAppointmentId
