@@ -152,6 +152,12 @@ function normalizePhoneForMeta(value?: string | null, defaultCountryCode?: strin
   if (!digitsOnly) return null;
   const countryCode = normalizeCountryCode(defaultCountryCode);
   if (!countryCode) return digitsOnly.length >= 7 ? digitsOnly : null;
+  if (digitsOnly.startsWith(countryCode)) {
+    const len = digitsOnly.length;
+    if (len >= 8 && len <= 15 && (countryCode !== "1" || digitsOnly.length === 11)) {
+      return digitsOnly;
+    }
+  }
   const normalized = `${countryCode}${digitsOnly}`;
   return normalized.length >= 7 ? normalized : null;
 }
@@ -324,7 +330,7 @@ export async function sendMetaCapi(args: MetaCapiArgs): Promise<MetaCapiResult> 
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: requestBody,
-    cache: "no-store"
+    cache: "no-store",
   });
 
   const text = await res.text();

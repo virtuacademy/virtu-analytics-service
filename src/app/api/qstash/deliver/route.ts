@@ -9,7 +9,8 @@ import { sendTikTokEvent } from "@/lib/outbound/tiktok";
 export const runtime = "nodejs";
 
 async function verifyQStash(req: NextRequest, body: string) {
-  const signature = req.headers.get("upstash-signature") ?? req.headers.get("Upstash-Signature") ?? "";
+  const signature =
+    req.headers.get("upstash-signature") ?? req.headers.get("Upstash-Signature") ?? "";
   if (!signature) return false;
 
   const currentSigningKey = process.env.QSTASH_CURRENT_SIGNING_KEY;
@@ -24,15 +25,17 @@ export async function POST(req: NextRequest) {
   const raw = await req.text();
 
   const okSig = await verifyQStash(req, raw);
-  if (!okSig) return NextResponse.json({ ok: false, error: "Invalid QStash signature" }, { status: 401 });
+  if (!okSig)
+    return NextResponse.json({ ok: false, error: "Invalid QStash signature" }, { status: 401 });
 
   const { canonicalEventId } = JSON.parse(raw) as { canonicalEventId: string };
 
   const ce = await prisma.canonicalEvent.findUnique({
     where: { id: canonicalEventId },
-    include: { deliveries: true }
+    include: { deliveries: true },
   });
-  if (!ce) return NextResponse.json({ ok: false, error: "Missing canonical event" }, { status: 404 });
+  if (!ce)
+    return NextResponse.json({ ok: false, error: "Missing canonical event" }, { status: 404 });
 
   const appt = ce.appointmentId
     ? await prisma.appointment.findUnique({ where: { id: ce.appointmentId } })
@@ -71,8 +74,8 @@ export async function POST(req: NextRequest) {
           lastAttemptAt: new Date(),
           responseCode: patch.responseCode,
           responseBody: patch.responseBody,
-          requestBody: patch.requestBody
-        }
+          requestBody: patch.requestBody,
+        },
       });
     };
 
@@ -102,8 +105,8 @@ export async function POST(req: NextRequest) {
               appointment_type_id: appt?.appointmentTypeId ?? null,
               utm_campaign: attrib?.utmCampaign ?? null,
               utm_source: attrib?.utmSource ?? null,
-              utm_medium: attrib?.utmMedium ?? null
-            }
+              utm_medium: attrib?.utmMedium ?? null,
+            },
           });
 
           if (r.skipped) {
@@ -113,7 +116,7 @@ export async function POST(req: NextRequest) {
               status: r.ok ? "SUCCESS" : "FAILED",
               responseCode: r.status,
               responseBody: r.body,
-              requestBody: r.requestBody
+              requestBody: r.requestBody,
             });
           }
         }
@@ -141,19 +144,19 @@ export async function POST(req: NextRequest) {
               utm_medium: attrib?.utmMedium ?? "",
               utm_campaign: attrib?.utmCampaign ?? "",
               gclid: appt?.gclid ?? attrib?.gclid ?? "",
-              ttclid: appt?.ttclid ?? attrib?.ttclid ?? ""
+              ttclid: appt?.ttclid ?? attrib?.ttclid ?? "",
             },
             hutk: attrib?.hubspotutk ?? null,
             pageUri: attrib?.lastUrl ?? null,
             pageName: null,
-            ipAddress: ip
+            ipAddress: ip,
           });
 
           await mark({
             status: r.ok ? "SUCCESS" : "FAILED",
             responseCode: r.status,
             responseBody: r.body,
-            requestBody: r.requestBody
+            requestBody: r.requestBody,
           });
         }
       }
@@ -175,7 +178,7 @@ export async function POST(req: NextRequest) {
             phone,
             firstName: appt?.firstName ?? null,
             lastName: appt?.lastName ?? null,
-            userIpAddress: ip
+            userIpAddress: ip,
           });
           if (r.skipped) {
             await mark({ status: "SKIPPED", responseBody: r.reason });
@@ -184,7 +187,7 @@ export async function POST(req: NextRequest) {
               status: r.ok ? "SUCCESS" : "FAILED",
               responseCode: r.status,
               responseBody: r.body,
-              requestBody: r.requestBody
+              requestBody: r.requestBody,
             });
           }
         }
@@ -193,9 +196,13 @@ export async function POST(req: NextRequest) {
       if (d.platform === "TIKTOK") {
         const r = await sendTikTokEvent({
           eventId,
-          ttclid: appt?.ttclid ?? attrib?.ttclid ?? null
+          ttclid: appt?.ttclid ?? attrib?.ttclid ?? null,
         });
-        await mark({ status: r.skipped ? "SKIPPED" : "FAILED", responseBody: r.reason, requestBody: r.requestBody });
+        await mark({
+          status: r.skipped ? "SKIPPED" : "FAILED",
+          responseBody: r.reason,
+          requestBody: r.requestBody,
+        });
       }
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Unknown error";

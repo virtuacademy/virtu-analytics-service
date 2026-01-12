@@ -117,7 +117,7 @@
       function parseCookies() {
         return document.cookie
           .split(";")
-          .map(part => part.trim())
+          .map((part) => part.trim())
           .filter(Boolean)
           .reduce((acc, pair) => {
             const idx = pair.indexOf("=");
@@ -131,13 +131,13 @@
 
       function pickParams() {
         const sp = new URLSearchParams(window.location.search);
-        const get = key => (sp.has(key) ? sp.get(key) : null);
+        const get = (key) => (sp.has(key) ? sp.get(key) : null);
         const utm = {
           utm_source: get("utm_source"),
           utm_medium: get("utm_medium"),
           utm_campaign: get("utm_campaign"),
           utm_term: get("utm_term"),
-          utm_content: get("utm_content")
+          utm_content: get("utm_content"),
         };
         const click = {
           gclid: get("gclid"),
@@ -148,7 +148,7 @@
           fbp: get("fbp"),
           fbc: get("fbc"),
           ttclid: get("ttclid"),
-          msclkid: get("msclkid")
+          msclkid: get("msclkid"),
         };
         const hubspotutk = get("hubspotutk");
         return { utm, click, hubspotutk };
@@ -156,7 +156,7 @@
 
       function compact(obj) {
         const out = {};
-        Object.keys(obj).forEach(key => {
+        Object.keys(obj).forEach((key) => {
           const value = obj[key];
           if (value !== null && value !== undefined && value !== "") {
             out[key] = value;
@@ -178,7 +178,7 @@
           referrer: document.referrer || null,
           utm: compact(picked.utm),
           click: compact(picked.click),
-          hubspotutk: picked.hubspotutk || null
+          hubspotutk: picked.hubspotutk || null,
         };
         paramsEl.textContent = JSON.stringify(payload, null, 2);
 
@@ -186,7 +186,7 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify(payload)
+          body: JSON.stringify(payload),
         });
         const text = await res.text();
         ingestEl.textContent = text;
@@ -211,16 +211,16 @@
             email: "test@example.com",
             phone: "+15551231234",
             firstName: "Test",
-            lastName: "User"
-          }
+            lastName: "User",
+          },
         };
         const res = await fetch("/api/webhooks/acuity", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "x-acuity-dev": "1"
+            "x-acuity-dev": "1",
           },
-          body: JSON.stringify(payload)
+          body: JSON.stringify(payload),
         });
         const text = await res.text();
         webhookEl.textContent = text;
@@ -230,12 +230,12 @@
       paramsEl.textContent = JSON.stringify(pickParams(), null, 2);
 
       ingestBtn.addEventListener("click", () => {
-        sendIngest().catch(err => {
+        sendIngest().catch((err) => {
           ingestEl.textContent = String(err);
         });
       });
       webhookBtn.addEventListener("click", () => {
-        sendWebhook().catch(err => {
+        sendWebhook().catch((err) => {
           webhookEl.textContent = String(err);
         });
       });

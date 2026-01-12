@@ -32,9 +32,9 @@ export async function fetchAppointmentById(appointmentId: string): Promise<Acuit
   const url = `https://acuityscheduling.com/api/v1/appointments/${encodeURIComponent(appointmentId)}?pastFormAnswers=true`;
   const res = await fetch(url, {
     headers: {
-      Authorization: basicAuthHeader(userId, apiKey)
+      Authorization: basicAuthHeader(userId, apiKey),
     },
-    cache: "no-store"
+    cache: "no-store",
   });
 
   if (!res.ok) {
@@ -45,13 +45,13 @@ export async function fetchAppointmentById(appointmentId: string): Promise<Acuit
 }
 
 export function extractIntakeValue(appt: AcuityAppointment, fieldId: number): string | null {
-  const f = appt.fields?.find(x => x.id === fieldId);
+  const f = appt.fields?.find((x) => x.id === fieldId);
   const v = f?.value?.trim();
   if (v) return v;
 
   const formValue = appt.forms
-    ?.flatMap(form => form.values ?? [])
-    .find(value => Number(value.fieldID) === fieldId);
+    ?.flatMap((form) => form.values ?? [])
+    .find((value) => Number(value.fieldID) === fieldId);
   const formTrimmed = formValue?.value?.trim();
   return formTrimmed ? formTrimmed : null;
 }
@@ -66,6 +66,6 @@ export function appointmentSnapshot(appt: AcuityAppointment) {
     phone: normPhoneE164Digits(appt.phone) ?? null,
     firstName: appt.firstName?.trim() ?? null,
     lastName: appt.lastName?.trim() ?? null,
-    scheduledBy: appt.scheduledBy?.trim() ?? null
+    scheduledBy: appt.scheduledBy?.trim() ?? null,
   };
 }

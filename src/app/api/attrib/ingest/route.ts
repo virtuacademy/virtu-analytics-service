@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
   await prisma.visitor.upsert({
     where: { id: vid },
     update: { lastSeenAt: t },
-    create: { id: vid, firstSeenAt: t }
+    create: { id: vid, firstSeenAt: t },
   });
 
   await prisma.session.upsert({
@@ -84,8 +84,8 @@ export async function POST(req: NextRequest) {
       visitorId: vid,
       firstSeenAt: t,
       ipFirst: ip ?? undefined,
-      uaFirst: ua ?? undefined
-    }
+      uaFirst: ua ?? undefined,
+    },
   });
 
   const existing = await prisma.attribution.findUnique({ where: { token: attribTok } });
@@ -138,7 +138,7 @@ export async function POST(req: NextRequest) {
       hubspotutk: hubspotutk ?? existing?.hubspotutk ?? null,
 
       visitorId: vid,
-      sessionId: sid
+      sessionId: sid,
     },
     create: {
       token: attribTok,
@@ -171,8 +171,8 @@ export async function POST(req: NextRequest) {
 
       hubspotutk: hubspotutk ?? null,
       visitorId: vid,
-      sessionId: sid
-    }
+      sessionId: sid,
+    },
   });
 
   const res = NextResponse.json({
@@ -180,7 +180,7 @@ export async function POST(req: NextRequest) {
     vid,
     sid,
     attribTok,
-    cookieDomain: COOKIE_DOMAIN
+    cookieDomain: COOKIE_DOMAIN,
   });
   setCookie(res, "va_vid", vid, 60 * 60 * 24 * 90);
   setCookie(res, "va_sid", sid, 60 * 60 * 24 * 30);

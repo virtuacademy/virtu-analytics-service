@@ -22,12 +22,12 @@ async function forwardLegacyWebhook(opts: {
       method: "POST",
       headers,
       body: opts.raw,
-      signal: controller.signal
+      signal: controller.signal,
     });
     if (!res.ok) {
       console.warn("Legacy webhook forward failed", {
         status: res.status,
-        statusText: res.statusText
+        statusText: res.statusText,
       });
     }
   } catch (err) {
@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
       url: legacyUrl,
       raw,
       contentType,
-      signature: sig || undefined
+      signature: sig || undefined,
     });
   }
 
@@ -78,8 +78,8 @@ export async function POST(req: NextRequest) {
         action,
         externalId,
         bodyRaw: raw,
-        bodyHash
-      }
+        bodyHash,
+      },
     });
   } catch {
     return NextResponse.json({ ok: true, deduped: true });
@@ -105,7 +105,7 @@ export async function POST(req: NextRequest) {
     where: { id: String(appt.id) },
     update: {
       appointmentTypeId: snap.appointmentTypeId,
-      calendarId: snap.calendarId ?? (calendarID ?? null),
+      calendarId: snap.calendarId ?? calendarID ?? null,
       status: snap.status,
       datetime: snap.datetime,
       email: snap.email,
@@ -118,12 +118,12 @@ export async function POST(req: NextRequest) {
       ttclid,
       fbp,
       fbc,
-      rawJson: JSON.stringify(appt)
+      rawJson: JSON.stringify(appt),
     },
     create: {
       id: String(appt.id),
-      appointmentTypeId: snap.appointmentTypeId ?? (appointmentTypeID ?? null),
-      calendarId: snap.calendarId ?? (calendarID ?? null),
+      appointmentTypeId: snap.appointmentTypeId ?? appointmentTypeID ?? null,
+      calendarId: snap.calendarId ?? calendarID ?? null,
       status: snap.status,
       datetime: snap.datetime,
       email: snap.email,
@@ -136,15 +136,17 @@ export async function POST(req: NextRequest) {
       ttclid,
       fbp,
       fbc,
-      rawJson: JSON.stringify(appt)
-    }
+      rawJson: JSON.stringify(appt),
+    },
   });
 
   const trialTypeIdsRaw =
-    process.env.ACUITY_TRIAL_APPOINTMENT_TYPE_IDS ?? process.env.ACUITY_TRIAL_APPOINTMENT_TYPE_ID ?? "";
+    process.env.ACUITY_TRIAL_APPOINTMENT_TYPE_IDS ??
+    process.env.ACUITY_TRIAL_APPOINTMENT_TYPE_ID ??
+    "";
   const trialTypeIds = trialTypeIdsRaw
     .split(",")
-    .map(id => id.trim())
+    .map((id) => id.trim())
     .filter(Boolean);
   const apptTypeId =
     appt.appointmentTypeID != null
@@ -154,7 +156,8 @@ export async function POST(req: NextRequest) {
         : "";
   const isTrial = trialTypeIds.length > 0 && trialTypeIds.includes(apptTypeId);
 
-  let eventName: "TRIAL_BOOKED" | "TRIAL_RESCHEDULED" | "TRIAL_CANCELED" | "APPOINTMENT_UPDATED" = "APPOINTMENT_UPDATED";
+  let eventName: "TRIAL_BOOKED" | "TRIAL_RESCHEDULED" | "TRIAL_CANCELED" | "APPOINTMENT_UPDATED" =
+    "APPOINTMENT_UPDATED";
   if (isTrial) {
     if (appt.canceled || action === "canceled") eventName = "TRIAL_CANCELED";
     else if (action === "rescheduled") eventName = "TRIAL_RESCHEDULED";
@@ -172,8 +175,8 @@ export async function POST(req: NextRequest) {
       attributionTok: vaAttrib ?? null,
       value: null,
       currency: "USD",
-      eventId
-    }
+      eventId,
+    },
   });
 
   await prisma.delivery.createMany({
@@ -181,9 +184,9 @@ export async function POST(req: NextRequest) {
       { canonicalEventId: ce.id, platform: "META" },
       { canonicalEventId: ce.id, platform: "HUBSPOT" },
       { canonicalEventId: ce.id, platform: "GOOGLE_ADS" },
-      { canonicalEventId: ce.id, platform: "TIKTOK" }
+      { canonicalEventId: ce.id, platform: "TIKTOK" },
     ],
-    skipDuplicates: true
+    skipDuplicates: true,
   });
 
   await enqueueDelivery(ce.id);

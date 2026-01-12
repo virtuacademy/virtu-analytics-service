@@ -2,7 +2,12 @@ export function normEmail(email?: string | null): string | null {
   if (!email) return null;
   const e = email.trim().toLowerCase();
   if (!e || !e.includes("@")) return null;
-  return e.split(/[,\s;]/).map(s => s.trim()).find(s => s.includes("@")) ?? null;
+  return (
+    e
+      .split(/[,\s;]/)
+      .map((s) => s.trim())
+      .find((s) => s.includes("@")) ?? null
+  );
 }
 
 export function normPhoneE164Digits(phone?: string | null): string | null {

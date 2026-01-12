@@ -22,19 +22,23 @@ type CollapsibleCanonicalEventsProps = {
   canonicalEvents: CanonicalEvent[];
 };
 
-export function CollapsibleCanonicalEvents({
-  canonicalEvents,
-}: CollapsibleCanonicalEventsProps) {
-  const [isExpanded, setIsExpanded] = useState(true);
+export function CollapsibleCanonicalEvents({ canonicalEvents }: CollapsibleCanonicalEventsProps) {
+  // Start collapsed by default for better UX
+  const [isExpanded, setIsExpanded] = useState(false);
 
   return (
     <section className="mb-12">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="group flex items-center gap-2 mb-6"
+        className="group flex items-center gap-2 mb-6 hover:opacity-80 transition-opacity"
       >
         <h2 className="text-2xl font-semibold flex items-center gap-2">
-          <svg className="w-5 h-5 text-pink-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <svg
+            className="w-5 h-5 text-pink-400"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -44,8 +48,11 @@ export function CollapsibleCanonicalEvents({
           </svg>
           Canonical Events
         </h2>
+        <span className="ml-2 text-xs text-zinc-500 font-normal">
+          {canonicalEvents.length} event{canonicalEvents.length !== 1 ? "s" : ""}
+        </span>
         <svg
-          className={`w-5 h-5 text-zinc-400 transition-transform ${
+          className={`w-5 h-5 text-zinc-400 transition-transform duration-200 ${
             isExpanded ? "rotate-180" : ""
           }`}
           fill="none"
@@ -82,7 +89,7 @@ export function CollapsibleCanonicalEvents({
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/50">
-              {canonicalEvents.map(ce => (
+              {canonicalEvents.map((ce) => (
                 <tr key={ce.id} className="transition-colors hover:bg-zinc-800/30">
                   <td className="px-4 py-3">
                     <span className="inline-flex items-center gap-1.5 rounded-full bg-pink-500/10 px-2.5 py-1 text-xs font-medium text-pink-400">
@@ -102,15 +109,15 @@ export function CollapsibleCanonicalEvents({
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-1.5">
-                      {ce.deliveries.map(d => (
+                      {ce.deliveries.map((d) => (
                         <span
                           key={d.id}
                           className={`inline-flex items-center rounded-full px-2 py-1 text-[10px] font-medium ${
                             d.status === "SUCCESS"
                               ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
                               : d.status === "PENDING"
-                              ? "bg-yellow-500/10 text-yellow-400 border border-yellow-500/20"
-                              : "bg-red-500/10 text-red-400 border border-red-500/20"
+                                ? "bg-yellow-500/10 text-yellow-400 border border-yellow-500/20"
+                                : "bg-red-500/10 text-red-400 border border-red-500/20"
                           }`}
                         >
                           {d.platform}:{d.status}
