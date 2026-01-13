@@ -85,10 +85,18 @@ function parseEventNameMap(value?: string | null): Record<string, string> {
   return map;
 }
 
-function resolveMetaEventName(canonicalEventName?: string | null): string {
+function resolveMetaEventName(canonicalEventName?: string | null): string | null {
   const mapping = parseEventNameMap(process.env.META_CAPI_EVENT_NAMES);
+  const hasMapping = Object.keys(mapping).length > 0;
   if (canonicalEventName && mapping[canonicalEventName]) {
     return mapping[canonicalEventName];
+  }
+  const fallback = process.env.META_CAPI_EVENT_NAME;
+  if (fallback && fallback.trim()) {
+    return fallback.trim();
+  }
+  if (hasMapping) {
+    return null;
   }
   const defaults: Record<string, string> = {
     TRIAL_BOOKED: "SubmitApplication",
@@ -311,6 +319,9 @@ export async function sendMetaCapi(args: MetaCapiArgs): Promise<MetaCapiResult> 
 
   const { pixelId, accessToken, testEventCode, apiVersion } = authResult.auth;
   const metaEventName = resolveMetaEventName(args.eventName);
+  if (!metaEventName) {
+    return { skipped: true, reason: "Missing META_CAPI_EVENT_NAME(S)" };
+  }
   const userData = buildUserData(args);
   if (Object.keys(userData).length === 0) {
     return { skipped: true, reason: "Missing user data" };
