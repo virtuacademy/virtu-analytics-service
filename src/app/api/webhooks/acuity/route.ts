@@ -6,6 +6,15 @@ import { enqueueDelivery } from "@/lib/qstash";
 
 export const runtime = "nodejs";
 
+function normalizeAmountPaid(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
 async function forwardLegacyWebhook(opts: {
   url: string;
   raw: string;
@@ -86,6 +95,7 @@ export async function POST(req: NextRequest) {
   }
 
   const appt = await fetchAppointmentById(externalId);
+  const amountPaid = normalizeAmountPaid(appt.amountPaid);
 
   const VA_ATTRIB_FIELD_ID = Number(process.env.ACUITY_FIELD_VA_ATTRIB_ID || "0") || null;
   const GCLID_FIELD_ID = Number(process.env.ACUITY_FIELD_GCLID_ID || "0") || null;
@@ -173,7 +183,7 @@ export async function POST(req: NextRequest) {
       eventTime: new Date(),
       appointmentId: String(appt.id),
       attributionTok: vaAttrib ?? null,
-      value: null,
+      value: amountPaid,
       currency: "USD",
       eventId,
     },
