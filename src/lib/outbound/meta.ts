@@ -102,6 +102,7 @@ function resolveMetaEventName(canonicalEventName?: string | null): string | null
     TRIAL_BOOKED: "SubmitApplication",
     TRIAL_RESCHEDULED: "Schedule",
     TRIAL_CANCELED: "Cancel",
+    APPOINTMENT_BOOKED: "Schedule",
     APPOINTMENT_UPDATED: "Schedule",
   };
   return canonicalEventName && defaults[canonicalEventName] ? defaults[canonicalEventName] : "Lead";

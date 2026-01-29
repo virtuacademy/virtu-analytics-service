@@ -166,13 +166,19 @@ export async function POST(req: NextRequest) {
         : "";
   const isTrial = trialTypeIds.length > 0 && trialTypeIds.includes(apptTypeId);
 
-  let eventName: "TRIAL_BOOKED" | "TRIAL_RESCHEDULED" | "TRIAL_CANCELED" | "APPOINTMENT_UPDATED" =
-    "APPOINTMENT_UPDATED";
+  let eventName:
+    | "TRIAL_BOOKED"
+    | "TRIAL_RESCHEDULED"
+    | "TRIAL_CANCELED"
+    | "APPOINTMENT_BOOKED"
+    | "APPOINTMENT_UPDATED" = "APPOINTMENT_UPDATED";
   if (isTrial) {
     if (appt.canceled || action === "canceled") eventName = "TRIAL_CANCELED";
     else if (action === "rescheduled") eventName = "TRIAL_RESCHEDULED";
     else if (action === "scheduled") eventName = "TRIAL_BOOKED";
     else eventName = "TRIAL_BOOKED";
+  } else if (action === "scheduled") {
+    eventName = "APPOINTMENT_BOOKED";
   }
 
   const eventId = String(appt.id);
