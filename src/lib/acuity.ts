@@ -6,6 +6,7 @@ export type AcuityAppointment = {
   calendarID?: number;
   datetime?: string;
   canceled?: boolean;
+  amountPaid?: number | string | null;
   firstName?: string;
   lastName?: string;
   email?: string;
