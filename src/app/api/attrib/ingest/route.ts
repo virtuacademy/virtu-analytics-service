@@ -30,6 +30,16 @@ function normalizeValue(value?: string | null) {
 }
 
 const SESSION_WINDOW_MS = 30 * 60 * 1000;
+const META_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 90;
+
+function buildFbp(createdAtMs: number): string {
+  const random = Math.floor(1000000000 + Math.random() * 9000000000);
+  return `fb.1.${createdAtMs}.${random}`;
+}
+
+function buildFbc(createdAtMs: number, fbclid: string): string {
+  return `fb.1.${createdAtMs}.${fbclid}`;
+}
 
 export async function OPTIONS(req: NextRequest) {
   const res = NextResponse.json({ ok: true });
@@ -102,8 +112,28 @@ export async function POST(req: NextRequest) {
   const wbraid = normalizeValue(body.click?.wbraid);
   const dclid = normalizeValue(body.click?.dclid);
   const fbclid = normalizeValue(body.click?.fbclid);
-  const fbp = normalizeValue(body.click?.fbp);
-  const fbc = normalizeValue(body.click?.fbc);
+  const fbpFromBody = normalizeValue(body.click?.fbp);
+  const fbcFromBody = normalizeValue(body.click?.fbc);
+  const fbpFromCookie = normalizeValue(req.cookies.get("_fbp")?.value);
+  const fbcFromCookie = normalizeValue(req.cookies.get("_fbc")?.value);
+  let fbp = fbpFromBody ?? fbpFromCookie ?? null;
+  let fbc = fbcFromBody ?? fbcFromCookie ?? null;
+  let setFbpCookie = false;
+  let setFbcCookie = false;
+
+  if (!fbp) {
+    fbp = buildFbp(t.getTime());
+    setFbpCookie = true;
+  } else if (!fbpFromCookie) {
+    setFbpCookie = true;
+  }
+
+  if (!fbc && fbclid) {
+    fbc = buildFbc(t.getTime(), fbclid);
+    setFbcCookie = true;
+  } else if (fbc && !fbcFromCookie) {
+    setFbcCookie = true;
+  }
   const ttclid = normalizeValue(body.click?.ttclid);
   const msclkid = normalizeValue(body.click?.msclkid);
   const hubspotutk = normalizeValue(body.hubspotutk);
@@ -185,6 +215,12 @@ export async function POST(req: NextRequest) {
   setCookie(res, "va_vid", vid, 60 * 60 * 24 * 90);
   setCookie(res, "va_sid", sid, 60 * 60 * 24 * 30);
   setReadableCookie(res, "va_attrib", attribTok, 60 * 60 * 24 * 90);
+  if (setFbpCookie && fbp) {
+    setReadableCookie(res, "_fbp", fbp, META_COOKIE_MAX_AGE_SECONDS);
+  }
+  if (setFbcCookie && fbc) {
+    setReadableCookie(res, "_fbc", fbc, META_COOKIE_MAX_AGE_SECONDS);
+  }
 
   return withCors(res, origin);
 }
