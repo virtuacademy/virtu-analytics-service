@@ -1,6 +1,8 @@
 # Virtu Analytics v1
 
 ## TODO:
+- update va_attrib from webflow thing
+
 - check that only initial schedules are counted (not reschedules). 
 - Add support for trial vs regular bookings (all track). 
 - Google ads: set new vs. old customer data for conversions. 

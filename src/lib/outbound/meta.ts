@@ -328,6 +328,16 @@ export async function sendMetaCapi(args: MetaCapiArgs): Promise<MetaCapiResult> 
     return { skipped: true, reason: "Missing user data" };
   }
   const customData = buildCustomData(args);
+  if (metaEventName.trim() === "StartTrial") {
+    const predictedLtvEnv = process.env.META_CAPI_PREDICTED_LTV;
+    const predictedLtv =
+      predictedLtvEnv && Number.isFinite(Number(predictedLtvEnv))
+        ? Number(predictedLtvEnv)
+        : null;
+    if (predictedLtv != null && customData.predicted_ltv == null) {
+      customData.predicted_ltv = predictedLtv;
+    }
+  }
   const dataProcessingOptions = buildDataProcessingOptions();
 
   const eventData: Record<string, unknown> = {
