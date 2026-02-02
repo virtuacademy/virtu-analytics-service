@@ -135,6 +135,7 @@ export async function POST(req: NextRequest) {
     setFbcCookie = true;
   }
   const ttclid = normalizeValue(body.click?.ttclid);
+  const ttp = normalizeValue(body.click?.ttp);
   const msclkid = normalizeValue(body.click?.msclkid);
   const hubspotutk = normalizeValue(body.hubspotutk);
 
@@ -163,6 +164,7 @@ export async function POST(req: NextRequest) {
       fbc: fbc ?? existing?.fbc ?? null,
 
       ttclid: ttclid ?? existing?.ttclid ?? null,
+      ttp: ttp ?? existing?.ttp ?? null,
       msclkid: msclkid ?? existing?.msclkid ?? null,
 
       hubspotutk: hubspotutk ?? existing?.hubspotutk ?? null,
@@ -197,6 +199,7 @@ export async function POST(req: NextRequest) {
       fbc: fbc ?? null,
 
       ttclid: ttclid ?? null,
+      ttp: ttp ?? null,
       msclkid: msclkid ?? null,
 
       hubspotutk: hubspotutk ?? null,

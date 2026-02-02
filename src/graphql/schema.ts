@@ -11,6 +11,7 @@ export const typeDefs = /* GraphQL */ `
     gclid: String
     fbclid: String
     ttclid: String
+    ttp: String
     fbp: String
     fbc: String
     lastUrl: String

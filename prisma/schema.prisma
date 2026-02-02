@@ -79,6 +79,7 @@ model Attribution {
   fbc            String?
 
   ttclid         String?
+  ttp            String?
   msclkid        String?
 
   hubspotutk     String?
