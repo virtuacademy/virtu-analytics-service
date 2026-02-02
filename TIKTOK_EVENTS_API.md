@@ -213,7 +213,7 @@ Step 3: "8d969eef6ecad3c2..." (SHA256 hex)
 │  1. Check OUTBOUND_MODE=mock                           │
 │  2. Validate TIKTOK_PIXEL_ID + TIKTOK_ACCESS_TOKEN     │
 │  3. Map event name (TRIAL_BOOKED → SubmitForm)         │
-│  4. Check for identifiers (ttclid OR email/phone)      │
+│  4. Check for identifiers (ttclid OR ttp OR email/phone)│
 │  5. Hash PII (email, phone, external_id)               │
 │  6. Build JSON request                                  │
 │  7. POST to TikTok API                                  │

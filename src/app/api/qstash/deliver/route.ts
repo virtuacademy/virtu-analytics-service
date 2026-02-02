@@ -194,6 +194,7 @@ export async function POST(req: NextRequest) {
             conversionValue: ce.value ?? null,
             currencyCode: ce.currency ?? null,
             ttclid: appt?.ttclid ?? attrib?.ttclid ?? null,
+            ttp: attrib?.ttp ?? null,
             email,
             phone,
             externalId: ce.attributionTok ?? null,

@@ -437,7 +437,7 @@ export async function sendTikTokEvent(args: TikTokEventArgs): Promise<TikTokSend
   }
 
   // 4. Hash user identifiers
-  const defaultCountryCode = process.env.TIKTOK_DEFAULT_PHONE_COUNTRY_CODE ?? null;
+  const defaultCountryCode = process.env.TIKTOK_DEFAULT_PHONE_COUNTRY_CODE ?? "1";
   const hashedEmail = hashEmail(args.email);
   const hashedPhone = hashPhone(args.phone, defaultCountryCode);
   const hashedExternalId = hashExternalId(args.externalId);
