@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 export function withCors(res: NextResponse, origin: string | null) {
   const allowed = (process.env.ALLOWED_ORIGINS ?? "")
     .split(",")
-    .map(s => s.trim())
+    .map((s) => s.trim())
     .filter(Boolean);
 
   const allowOrigin = origin && allowed.includes(origin) ? origin : (allowed[0] ?? "");

@@ -20,8 +20,8 @@ export async function submitHubSpotForm(args: {
       hutk: args.hutk ?? undefined,
       pageUri: args.pageUri ?? undefined,
       pageName: args.pageName ?? undefined,
-      ipAddress: args.ipAddress ?? undefined
-    }
+      ipAddress: args.ipAddress ?? undefined,
+    },
   };
   const requestBody = JSON.stringify(body);
 
@@ -29,10 +29,10 @@ export async function submitHubSpotForm(args: {
     method: "POST",
     headers: {
       Authorization: `Bearer ${args.accessToken}`,
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
     },
     body: requestBody,
-    cache: "no-store"
+    cache: "no-store",
   });
 
   const text = await res.text();

@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 const server = new ApolloServer({ typeDefs, resolvers });
 
 const handler = startServerAndCreateNextHandler<NextRequest>(server, {
-  context: async () => ({})
+  context: async () => ({}),
 });
 
 export async function GET(req: NextRequest) {

@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { sendGoogleAdsClickConversion } from "@/lib/outbound/googleAds";
+import { sendMetaCapi } from "@/lib/outbound/meta";
 
 export const runtime = "nodejs";
 
 function getTestSecret(req: NextRequest): string | null {
   const headerSecret =
-    req.headers.get("x-google-ads-test-secret") ??
+    req.headers.get("x-meta-test-secret") ??
     req.headers.get("x-test-secret") ??
     req.headers.get("authorization");
   if (headerSecret) {
@@ -38,10 +38,10 @@ function parseNumber(value: unknown): number | null {
 }
 
 export async function POST(req: NextRequest) {
-  const secret = process.env.GOOGLE_ADS_TEST_SECRET;
+  const secret = process.env.META_CAPI_TEST_SECRET;
   if (!secret) {
     return NextResponse.json(
-      { ok: false, error: "Missing GOOGLE_ADS_TEST_SECRET" },
+      { ok: false, error: "Missing META_CAPI_TEST_SECRET" },
       { status: 500 },
     );
   }
@@ -69,34 +69,49 @@ export async function POST(req: NextRequest) {
     typeof body.eventName === "string" && body.eventName.trim()
       ? body.eventName.trim()
       : "TRIAL_BOOKED";
-  const eventTimeValue = body.eventTime ?? body.conversionDateTime;
+  const eventTimeValue = body.eventTime;
   const parsedEventTime = parseDate(eventTimeValue);
   if (eventTimeValue && !parsedEventTime) {
-    return NextResponse.json(
-      { ok: false, error: "Invalid eventTime/conversionDateTime" },
-      { status: 400 },
-    );
+    return NextResponse.json({ ok: false, error: "Invalid eventTime" }, { status: 400 });
   }
 
-  const result = await sendGoogleAdsClickConversion({
+  const eventSourceUrl =
+    typeof body.eventSourceUrl === "string" && body.eventSourceUrl.trim()
+      ? body.eventSourceUrl.trim()
+      : "https://virtu.academy";
+
+  const result = await sendMetaCapi({
     eventId,
     eventName,
     eventTime: parsedEventTime ?? new Date(),
-    conversionValue: parseNumber(body.conversionValue ?? body.value),
-    currencyCode: typeof body.currencyCode === "string" ? body.currencyCode.trim() : undefined,
-    gclid: typeof body.gclid === "string" ? body.gclid.trim() : undefined,
-    gbraid: typeof body.gbraid === "string" ? body.gbraid.trim() : undefined,
-    wbraid: typeof body.wbraid === "string" ? body.wbraid.trim() : undefined,
+    eventSourceUrl,
     email: typeof body.email === "string" ? body.email.trim() : undefined,
     phone: typeof body.phone === "string" ? body.phone.trim() : undefined,
     firstName: typeof body.firstName === "string" ? body.firstName.trim() : undefined,
     lastName: typeof body.lastName === "string" ? body.lastName.trim() : undefined,
-    orderId: typeof body.orderId === "string" ? body.orderId.trim() : undefined,
+    city: typeof body.city === "string" ? body.city.trim() : undefined,
+    state: typeof body.state === "string" ? body.state.trim() : undefined,
+    zipCode: typeof body.zipCode === "string" ? body.zipCode.trim() : undefined,
+    country: typeof body.country === "string" ? body.country.trim() : undefined,
+    ip: typeof body.ip === "string" ? body.ip.trim() : undefined,
+    userAgent: typeof body.userAgent === "string" ? body.userAgent.trim() : undefined,
+    fbc: typeof body.fbc === "string" ? body.fbc.trim() : undefined,
+    fbp: typeof body.fbp === "string" ? body.fbp.trim() : undefined,
+    externalId: typeof body.externalId === "string" ? body.externalId.trim() : undefined,
+    value: parseNumber(body.value),
+    currency: typeof body.currency === "string" ? body.currency.trim() : undefined,
   });
 
   if (result.skipped) {
     return NextResponse.json({ ok: false, skipped: true, reason: result.reason });
   }
 
-  return NextResponse.json({ ok: result.ok, status: result.status, body: result.body });
+  let parsedBody: unknown = null;
+  try {
+    parsedBody = JSON.parse(result.body);
+  } catch {
+    parsedBody = result.body;
+  }
+
+  return NextResponse.json({ ok: result.ok, status: result.status, body: parsedBody });
 }

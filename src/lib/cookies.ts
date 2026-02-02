@@ -13,11 +13,16 @@ export function setCookie(res: NextResponse, name: string, value: string, maxAge
     sameSite: "lax",
     path: "/",
     maxAge: maxAgeSeconds,
-    domain: isDev ? undefined : COOKIE_DOMAIN
+    domain: isDev ? undefined : COOKIE_DOMAIN,
   });
 }
 
-export function setReadableCookie(res: NextResponse, name: string, value: string, maxAgeSeconds: number) {
+export function setReadableCookie(
+  res: NextResponse,
+  name: string,
+  value: string,
+  maxAgeSeconds: number,
+) {
   // DEV ONLY: allow localhost testing (remove/adjust before prod deploy).
   const isDev = process.env.NODE_ENV !== "production";
   res.cookies.set({
@@ -28,6 +33,6 @@ export function setReadableCookie(res: NextResponse, name: string, value: string
     sameSite: "lax",
     path: "/",
     maxAge: maxAgeSeconds,
-    domain: isDev ? undefined : COOKIE_DOMAIN
+    domain: isDev ? undefined : COOKIE_DOMAIN,
   });
 }
