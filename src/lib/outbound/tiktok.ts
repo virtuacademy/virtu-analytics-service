@@ -15,7 +15,7 @@ import { sha256Hex } from "../crypto";
  * Optional Environment Variables:
  *   - TIKTOK_TEST_EVENT_CODE: Test event code for debugging (events appear in Test Events tab)
  *   - TIKTOK_DEFAULT_PHONE_COUNTRY_CODE: Default country code for phone numbers (e.g., "1" for US)
- *   - TIKTOK_EVENT_ACTIONS: Custom event name mapping (e.g., "TRIAL_BOOKED=SubmitForm,APPOINTMENT_UPDATED=Schedule")
+ *   - TIKTOK_EVENT_ACTIONS: Custom event name mapping (e.g., "TRIAL_BOOKED=StartTrial,APPOINTMENT_UPDATED=Schedule")
  *
  * @see https://github.com/tiktok/gtm-template-eapi (Official TikTok GTM template)
  * @see https://github.com/tiktok/tiktok-business-api-sdk (Official TikTok SDK)
@@ -23,7 +23,6 @@ import { sha256Hex } from "../crypto";
 
 const TIKTOK_API_VERSION = "v1.3";
 const TIKTOK_API_ENDPOINT = `https://business-api.tiktok.com/open_api/${TIKTOK_API_VERSION}/event/track/`;
-const PARTNER_NAME = "VirtuAnalytics";
 
 // ============================================================================
 // Type Definitions
@@ -48,6 +47,15 @@ export type TikTokEventArgs = {
 
   /** Currency code (ISO 4217, e.g., "USD") */
   currencyCode?: string | null;
+
+  /** Product or service identifier (TikTok content_id) */
+  contentId?: string | null;
+
+  /** Content type (TikTok content_type, e.g., "product" or "service") */
+  contentType?: string | null;
+
+  /** Item price (TikTok price) */
+  price?: number | null;
 
   // Click identifiers
   /** TikTok Click ID from URL parameter (ttclid) */
@@ -237,10 +245,11 @@ function hashExternalId(value?: string | null): string | null {
  * - Schedule: Appointment scheduling
  * - Contact: Contact form submissions
  * - ViewContent: Page/content views
+ * - StartTrial: Free trial starts
  * - AddToCart, InitiateCheckout, Purchase: E-commerce events
  */
 const DEFAULT_EVENT_MAPPING: Record<string, string> = {
-  TRIAL_BOOKED: "SubmitForm",
+  TRIAL_BOOKED: "StartTrial",
   TRIAL_RESCHEDULED: "SubmitForm",
   APPOINTMENT_UPDATED: "Schedule"
   // TRIAL_CANCELED is intentionally omitted - we skip canceled events
@@ -360,14 +369,21 @@ function buildPageObject(args: TikTokEventArgs): Record<string, string> | null {
  * Builds the properties object for TikTok event data.
  */
 function buildPropertiesObject(args: TikTokEventArgs): Record<string, unknown> | null {
-  if (args.conversionValue == null || !Number.isFinite(args.conversionValue)) {
-    return null;
+  const properties: Record<string, unknown> = {};
+
+  if (args.conversionValue != null && Number.isFinite(args.conversionValue)) {
+    properties.value = args.conversionValue;
+    properties.currency = args.currencyCode?.trim() || "USD";
   }
 
-  return {
-    value: args.conversionValue,
-    currency: args.currencyCode?.trim() || "USD"
-  };
+  if (args.contentId?.trim()) properties.content_id = args.contentId.trim();
+  if (args.contentType?.trim()) properties.content_type = args.contentType.trim();
+
+  if (args.price != null && Number.isFinite(args.price)) {
+    properties.price = args.price;
+  }
+
+  return Object.keys(properties).length > 0 ? properties : null;
 }
 
 // ============================================================================
@@ -442,15 +458,15 @@ export async function sendTikTokEvent(args: TikTokEventArgs): Promise<TikTokSend
   const hashedPhone = hashPhone(args.phone, defaultCountryCode);
   const hashedExternalId = hashExternalId(args.externalId);
 
-  // 5. Check for required identifiers (ttclid OR email/phone)
-  // This mirrors Google Ads: skip if no click IDs AND no user identifiers
+  // 5. Check for required identifiers (ttclid OR ttp OR email/phone OR external_id)
+  // TikTok can match on any of these identifiers for attribution
   const ttclid = args.ttclid?.trim() || null;
   const ttp = args.ttp?.trim() || null;
 
-  if (!ttclid && !ttp && !hashedEmail && !hashedPhone) {
+  if (!ttclid && !ttp && !hashedEmail && !hashedPhone && !hashedExternalId) {
     return {
       skipped: true,
-      reason: "Missing ttclid/ttp and user identifiers (email/phone)",
+      reason: "Missing ttclid/ttp and user identifiers (email/phone/external_id)",
       requestBody: JSON.stringify(args)
     };
   }
@@ -478,7 +494,6 @@ export async function sendTikTokEvent(args: TikTokEventArgs): Promise<TikTokSend
   const request: Record<string, unknown> = {
     event_source: "web",
     event_source_id: authResult.auth.pixelId,
-    partner_name: PARTNER_NAME,
     data: [eventData]
   };
 

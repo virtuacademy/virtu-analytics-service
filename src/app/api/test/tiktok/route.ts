@@ -9,8 +9,8 @@ export const runtime = "nodejs";
  * This endpoint allows manual testing of the TikTok Events API integration.
  * It mirrors the structure of /api/test/google-ads for consistency.
  *
- * Authentication:
- *   Set TIKTOK_TEST_SECRET in your environment, then provide it via:
+ * Authentication (optional):
+ *   If TIKTOK_TEST_SECRET is set, provide it via:
  *   - Header: Authorization: Bearer <secret>
  *   - Header: x-tiktok-test-secret: <secret>
  *   - Header: x-test-secret: <secret>
@@ -70,16 +70,11 @@ function parseNumber(value: unknown): number | null {
 
 export async function POST(req: NextRequest) {
   const secret = process.env.TIKTOK_TEST_SECRET;
-  if (!secret) {
-    return NextResponse.json(
-      { ok: false, error: "Missing TIKTOK_TEST_SECRET env var" },
-      { status: 500 }
-    );
-  }
-
-  const provided = getTestSecret(req);
-  if (!provided || provided !== secret) {
-    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  if (secret) {
+    const provided = getTestSecret(req);
+    if (!provided || provided !== secret) {
+      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+    }
   }
 
   let body: Record<string, unknown> = {};
@@ -115,6 +110,9 @@ export async function POST(req: NextRequest) {
     eventTime: parsedEventTime ?? new Date(),
     conversionValue: parseNumber(body.conversionValue ?? body.value),
     currencyCode: typeof body.currencyCode === "string" ? body.currencyCode.trim() : undefined,
+    contentId: typeof body.contentId === "string" ? body.contentId.trim() : undefined,
+    contentType: typeof body.contentType === "string" ? body.contentType.trim() : undefined,
+    price: parseNumber(body.price),
     ttclid: typeof body.ttclid === "string" ? body.ttclid.trim() : undefined,
     ttp: typeof body.ttp === "string" ? body.ttp.trim() : undefined,
     email: typeof body.email === "string" ? body.email.trim() : undefined,

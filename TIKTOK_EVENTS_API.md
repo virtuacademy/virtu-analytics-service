@@ -48,7 +48,7 @@ Canonical events are mapped to TikTok standard events:
 
 | Canonical Event | TikTok Event | Description |
 |-----------------|--------------|-------------|
-| `TRIAL_BOOKED` | `SubmitForm` | Trial lesson scheduled |
+| `TRIAL_BOOKED` | `StartTrial` | Trial lesson scheduled |
 | `TRIAL_RESCHEDULED` | `SubmitForm` | Trial rescheduled |
 | `TRIAL_CANCELED` | *(skipped)* | No event sent |
 | `APPOINTMENT_UPDATED` | `Schedule` | Regular appointment |
@@ -86,7 +86,7 @@ Access-Token: <your_access_token>
   "test_event_code": "<optional>",
   "data": [
     {
-      "event": "SubmitForm",
+      "event": "StartTrial",
       "event_time": 1704931200,
       "event_id": "appt-12345",
       "user": {
@@ -104,7 +104,10 @@ Access-Token: <your_access_token>
       },
       "properties": {
         "value": 50.00,
-        "currency": "USD"
+        "currency": "USD",
+        "content_id": "trial-lesson",
+        "content_type": "service",
+        "price": 50.00
       }
     }
   ]
@@ -127,12 +130,12 @@ Access-Token: <your_access_token>
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `event` | string | Yes | TikTok event name (e.g., `"SubmitForm"`) |
+| `event` | string | Yes | TikTok event name (e.g., `"StartTrial"`) |
 | `event_time` | integer | Yes | Unix timestamp (seconds) |
 | `event_id` | string | Yes | Unique ID for deduplication |
 | `user` | object | Yes | User identifiers (see below) |
 | `page` | object | No | Page URL and referrer |
-| `properties` | object | No | Conversion value and currency |
+| `properties` | object | No | Conversion value and additional event parameters |
 
 #### User Object Fields
 
@@ -142,11 +145,21 @@ Access-Token: <your_access_token>
 | `ttp` | No | Conditional* | TikTok Pixel cookie |
 | `email` | **SHA256** | Conditional* | User email address |
 | `phone` | **SHA256** | Conditional* | User phone number |
-| `external_id` | **SHA256** | No | External user ID (e.g., va_attrib) |
+| `external_id` | **SHA256** | Conditional* | External user ID (e.g., va_attrib) |
 | `ip` | No | No | User's IP address |
 | `user_agent` | No | No | User's browser user agent |
 
-*At least one of `ttclid`, `ttp`, `email`, or `phone` is required.
+*At least one of `ttclid`, `ttp`, `email`, `phone`, or `external_id` is required.
+
+#### Properties Object Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `value` | number | No | Conversion value |
+| `currency` | string | No | ISO 4217 currency code |
+| `content_id` | string | No | Product or service identifier |
+| `content_type` | string | No | Content type (e.g., `"service"`, `"product"`) |
+| `price` | number | No | Item price |
 
 ## Data Hashing
 
@@ -212,8 +225,8 @@ Step 3: "8d969eef6ecad3c2..." (SHA256 hex)
 │                                                         │
 │  1. Check OUTBOUND_MODE=mock                           │
 │  2. Validate TIKTOK_PIXEL_ID + TIKTOK_ACCESS_TOKEN     │
-│  3. Map event name (TRIAL_BOOKED → SubmitForm)         │
-│  4. Check for identifiers (ttclid OR ttp OR email/phone)│
+│  3. Map event name (TRIAL_BOOKED → StartTrial)         │
+│  4. Check for identifiers (ttclid/ttp/email/phone/external_id)│
 │  5. Hash PII (email, phone, external_id)               │
 │  6. Build JSON request                                  │
 │  7. POST to TikTok API                                  │
@@ -234,7 +247,7 @@ Events are marked as `SKIPPED` (not sent to TikTok) when:
 |-----------|--------|
 | Missing credentials | `Missing env: TIKTOK_PIXEL_ID, TIKTOK_ACCESS_TOKEN` |
 | No event mapping | `No TikTok event mapping for: TRIAL_CANCELED` |
-| No identifiers | `Missing ttclid/ttp and user identifiers (email/phone)` |
+| No identifiers | `Missing ttclid/ttp and user identifiers (email/phone/external_id)` |
 | Mock mode enabled | `TIKTOK mock mode` |
 
 ## Response Handling
@@ -280,6 +293,9 @@ TIKTOK_TEST_EVENT_CODE=TEST12345
 
 ### Manual API Testing
 
+If `TIKTOK_TEST_SECRET` is set, include it in the request. Otherwise, the test
+endpoint accepts unauthenticated requests.
+
 ```bash
 curl -X POST https://analytics.virtu.academy/api/test/tiktok \
   -H "Authorization: Bearer YOUR_TEST_SECRET" \
@@ -302,7 +318,7 @@ curl -X POST https://analytics.virtu.academy/api/test/tiktok \
   "ok": true,
   "status": 200,
   "body": "{\"code\":0,\"message\":\"OK\",\"data\":{}}",
-  "requestBody": "{\"event_source\":\"web\",\"event_source_id\":\"CXXX\",\"partner_name\":\"VirtuAnalytics\",\"data\":[{\"event\":\"SubmitForm\",...}]}"
+  "requestBody": "{\"event_source\":\"web\",\"event_source_id\":\"CXXX\",\"partner_name\":\"VirtuAnalytics\",\"data\":[{\"event\":\"StartTrial\",...}]}"
 }
 ```
 
