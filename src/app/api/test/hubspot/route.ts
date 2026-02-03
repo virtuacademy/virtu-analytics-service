@@ -42,10 +42,7 @@ function readString(body: Record<string, unknown>, ...keys: string[]): string | 
 export async function POST(req: NextRequest) {
   const secret = process.env.HUBSPOT_TEST_SECRET;
   if (!secret) {
-    return NextResponse.json(
-      { ok: false, error: "Missing HUBSPOT_TEST_SECRET" },
-      { status: 500 },
-    );
+    return NextResponse.json({ ok: false, error: "Missing HUBSPOT_TEST_SECRET" }, { status: 500 });
   }
 
   const provided = getTestSecret(req);

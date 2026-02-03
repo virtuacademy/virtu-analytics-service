@@ -8,32 +8,32 @@ The TikTok integration sends conversion events (trial bookings, appointments) to
 
 ## Architecture Comparison
 
-| Component | Google Ads | TikTok |
-|-----------|-----------|--------|
-| Service file | `src/lib/outbound/googleAds.ts` | `src/lib/outbound/tiktok.ts` |
-| Main function | `sendGoogleAdsClickConversion()` | `sendTikTokEvent()` |
-| Test endpoint | `/api/test/google-ads` | `/api/test/tiktok` |
-| Click ID | `gclid`, `gbraid`, `wbraid` | `ttclid`, `ttp` |
-| Auth method | OAuth 2.0 (token refresh) | Static access token |
-| API endpoint | `googleads.googleapis.com/v22/...` | `business-api.tiktok.com/open_api/v1.3/event/track/` |
+| Component     | Google Ads                         | TikTok                                               |
+| ------------- | ---------------------------------- | ---------------------------------------------------- |
+| Service file  | `src/lib/outbound/googleAds.ts`    | `src/lib/outbound/tiktok.ts`                         |
+| Main function | `sendGoogleAdsClickConversion()`   | `sendTikTokEvent()`                                  |
+| Test endpoint | `/api/test/google-ads`             | `/api/test/tiktok`                                   |
+| Click ID      | `gclid`, `gbraid`, `wbraid`        | `ttclid`, `ttp`                                      |
+| Auth method   | OAuth 2.0 (token refresh)          | Static access token                                  |
+| API endpoint  | `googleads.googleapis.com/v22/...` | `business-api.tiktok.com/open_api/v1.3/event/track/` |
 
 ## Environment Variables
 
 ### Required
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `TIKTOK_PIXEL_ID` | Your TikTok Pixel ID (event_source_id) | `CXXXXXXXXXXXXXXXXX` |
-| `TIKTOK_ACCESS_TOKEN` | Events API access token | `abc123...` |
+| Variable              | Description                            | Example              |
+| --------------------- | -------------------------------------- | -------------------- |
+| `TIKTOK_PIXEL_ID`     | Your TikTok Pixel ID (event_source_id) | `CXXXXXXXXXXXXXXXXX` |
+| `TIKTOK_ACCESS_TOKEN` | Events API access token                | `abc123...`          |
 
 ### Optional
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `TIKTOK_TEST_EVENT_CODE` | Test event code for debugging | (none) |
-| `TIKTOK_DEFAULT_PHONE_COUNTRY_CODE` | Default country code for phone normalization | `1` (US) |
-| `TIKTOK_EVENT_ACTIONS` | Custom event name mapping | See below |
-| `TIKTOK_TEST_SECRET` | Secret for `/api/test/tiktok` endpoint | (none) |
+| Variable                            | Description                                  | Default   |
+| ----------------------------------- | -------------------------------------------- | --------- |
+| `TIKTOK_TEST_EVENT_CODE`            | Test event code for debugging                | (none)    |
+| `TIKTOK_DEFAULT_PHONE_COUNTRY_CODE` | Default country code for phone normalization | `1` (US)  |
+| `TIKTOK_EVENT_ACTIONS`              | Custom event name mapping                    | See below |
+| `TIKTOK_TEST_SECRET`                | Secret for `/api/test/tiktok` endpoint       | (none)    |
 
 ### Getting Credentials
 
@@ -46,12 +46,12 @@ The TikTok integration sends conversion events (trial bookings, appointments) to
 
 Canonical events are mapped to TikTok standard events:
 
-| Canonical Event | TikTok Event | Description |
-|-----------------|--------------|-------------|
-| `TRIAL_BOOKED` | `StartTrial` | Trial lesson scheduled |
-| `TRIAL_RESCHEDULED` | `SubmitForm` | Trial rescheduled |
-| `TRIAL_CANCELED` | *(skipped)* | No event sent |
-| `APPOINTMENT_UPDATED` | `Schedule` | Regular appointment |
+| Canonical Event       | TikTok Event | Description            |
+| --------------------- | ------------ | ---------------------- |
+| `TRIAL_BOOKED`        | `StartTrial` | Trial lesson scheduled |
+| `TRIAL_RESCHEDULED`   | `SubmitForm` | Trial rescheduled      |
+| `TRIAL_CANCELED`      | _(skipped)_  | No event sent          |
+| `APPOINTMENT_UPDATED` | `Schedule`   | Regular appointment    |
 
 ### Custom Mapping
 
@@ -103,11 +103,11 @@ Access-Token: <your_access_token>
         "referrer": "https://tiktok.com"
       },
       "properties": {
-        "value": 50.00,
+        "value": 50.0,
         "currency": "USD",
         "content_id": "trial-lesson",
         "content_type": "service",
-        "price": 50.00
+        "price": 50.0
       }
     }
   ]
@@ -118,48 +118,48 @@ Access-Token: <your_access_token>
 
 #### Top-Level Fields
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `event_source` | string | Yes | Always `"web"` |
-| `event_source_id` | string | Yes | Your Pixel ID |
-| `partner_name` | string | Yes | `"VirtuAnalytics"` |
-| `test_event_code` | string | No | For testing only |
-| `data` | array | Yes | Array of event objects |
+| Field             | Type   | Required | Description            |
+| ----------------- | ------ | -------- | ---------------------- |
+| `event_source`    | string | Yes      | Always `"web"`         |
+| `event_source_id` | string | Yes      | Your Pixel ID          |
+| `partner_name`    | string | Yes      | `"VirtuAnalytics"`     |
+| `test_event_code` | string | No       | For testing only       |
+| `data`            | array  | Yes      | Array of event objects |
 
 #### Event Object Fields
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `event` | string | Yes | TikTok event name (e.g., `"StartTrial"`) |
-| `event_time` | integer | Yes | Unix timestamp (seconds) |
-| `event_id` | string | Yes | Unique ID for deduplication |
-| `user` | object | Yes | User identifiers (see below) |
-| `page` | object | No | Page URL and referrer |
-| `properties` | object | No | Conversion value and additional event parameters |
+| Field        | Type    | Required | Description                                      |
+| ------------ | ------- | -------- | ------------------------------------------------ |
+| `event`      | string  | Yes      | TikTok event name (e.g., `"StartTrial"`)         |
+| `event_time` | integer | Yes      | Unix timestamp (seconds)                         |
+| `event_id`   | string  | Yes      | Unique ID for deduplication                      |
+| `user`       | object  | Yes      | User identifiers (see below)                     |
+| `page`       | object  | No       | Page URL and referrer                            |
+| `properties` | object  | No       | Conversion value and additional event parameters |
 
 #### User Object Fields
 
-| Field | Hashed | Required | Description |
-|-------|--------|----------|-------------|
-| `ttclid` | No | Conditional* | TikTok Click ID from URL |
-| `ttp` | No | Conditional* | TikTok Pixel cookie |
-| `email` | **SHA256** | Conditional* | User email address |
-| `phone` | **SHA256** | Conditional* | User phone number |
-| `external_id` | **SHA256** | Conditional* | External user ID (e.g., va_attrib) |
-| `ip` | No | No | User's IP address |
-| `user_agent` | No | No | User's browser user agent |
+| Field         | Hashed     | Required      | Description                        |
+| ------------- | ---------- | ------------- | ---------------------------------- |
+| `ttclid`      | No         | Conditional\* | TikTok Click ID from URL           |
+| `ttp`         | No         | Conditional\* | TikTok Pixel cookie                |
+| `email`       | **SHA256** | Conditional\* | User email address                 |
+| `phone`       | **SHA256** | Conditional\* | User phone number                  |
+| `external_id` | **SHA256** | Conditional\* | External user ID (e.g., va_attrib) |
+| `ip`          | No         | No            | User's IP address                  |
+| `user_agent`  | No         | No            | User's browser user agent          |
 
-*At least one of `ttclid`, `ttp`, `email`, `phone`, or `external_id` is required.
+\*At least one of `ttclid`, `ttp`, `email`, `phone`, or `external_id` is required.
 
 #### Properties Object Fields
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `value` | number | No | Conversion value |
-| `currency` | string | No | ISO 4217 currency code |
-| `content_id` | string | No | Product or service identifier |
-| `content_type` | string | No | Content type (e.g., `"service"`, `"product"`) |
-| `price` | number | No | Item price |
+| Field          | Type   | Required | Description                                   |
+| -------------- | ------ | -------- | --------------------------------------------- |
+| `value`        | number | No       | Conversion value                              |
+| `currency`     | string | No       | ISO 4217 currency code                        |
+| `content_id`   | string | No       | Product or service identifier                 |
+| `content_type` | string | No       | Content type (e.g., `"service"`, `"product"`) |
+| `price`        | number | No       | Item price                                    |
 
 ## Data Hashing
 
@@ -243,12 +243,12 @@ Step 3: "8d969eef6ecad3c2..." (SHA256 hex)
 
 Events are marked as `SKIPPED` (not sent to TikTok) when:
 
-| Condition | Reason |
-|-----------|--------|
-| Missing credentials | `Missing env: TIKTOK_PIXEL_ID, TIKTOK_ACCESS_TOKEN` |
-| No event mapping | `No TikTok event mapping for: TRIAL_CANCELED` |
-| No identifiers | `Missing ttclid/ttp and user identifiers (email/phone/external_id)` |
-| Mock mode enabled | `TIKTOK mock mode` |
+| Condition           | Reason                                                              |
+| ------------------- | ------------------------------------------------------------------- |
+| Missing credentials | `Missing env: TIKTOK_PIXEL_ID, TIKTOK_ACCESS_TOKEN`                 |
+| No event mapping    | `No TikTok event mapping for: TRIAL_CANCELED`                       |
+| No identifiers      | `Missing ttclid/ttp and user identifiers (email/phone/external_id)` |
+| Mock mode enabled   | `TIKTOK mock mode`                                                  |
 
 ## Response Handling
 
@@ -273,13 +273,13 @@ Events are marked as `SKIPPED` (not sent to TikTok) when:
 
 ### Common Error Codes
 
-| Code | Message | Solution |
-|------|---------|----------|
-| 0 | OK | Success |
-| 40000 | Invalid parameter | Check request format |
-| 40001 | Invalid access token | Regenerate token |
-| 40002 | Rate limit exceeded | Implement backoff |
-| 40100 | Pixel ID not found | Verify TIKTOK_PIXEL_ID |
+| Code  | Message              | Solution               |
+| ----- | -------------------- | ---------------------- |
+| 0     | OK                   | Success                |
+| 40000 | Invalid parameter    | Check request format   |
+| 40001 | Invalid access token | Regenerate token       |
+| 40002 | Rate limit exceeded  | Implement backoff      |
+| 40100 | Pixel ID not found   | Verify TIKTOK_PIXEL_ID |
 
 ## Testing
 
@@ -360,33 +360,33 @@ query {
 
 ### Similarities
 
-| Aspect | Implementation |
-|--------|----------------|
-| Auth validation | `buildAuth()` returns `{ ok, reason }` or `{ ok, auth }` |
-| Event mapping | `resolve*EventName()` with env var override |
-| Skip logic | Returns `{ skipped: true, reason }` |
-| Request logging | Stores `requestBody` in Delivery table |
-| Response logging | Stores `responseBody` and `responseCode` |
-| Mock mode | Checks `OUTBOUND_MODE=mock` |
-| Test endpoint | Same structure and auth pattern |
+| Aspect           | Implementation                                           |
+| ---------------- | -------------------------------------------------------- |
+| Auth validation  | `buildAuth()` returns `{ ok, reason }` or `{ ok, auth }` |
+| Event mapping    | `resolve*EventName()` with env var override              |
+| Skip logic       | Returns `{ skipped: true, reason }`                      |
+| Request logging  | Stores `requestBody` in Delivery table                   |
+| Response logging | Stores `responseBody` and `responseCode`                 |
+| Mock mode        | Checks `OUTBOUND_MODE=mock`                              |
+| Test endpoint    | Same structure and auth pattern                          |
 
 ### Differences
 
-| Aspect | Google Ads | TikTok |
-|--------|-----------|--------|
-| Auth | OAuth 2.0 token refresh | Static access token |
-| API format | REST with custom headers | REST with JSON body |
-| Time format | `2026-01-10 12:00:00+00:00` | Unix timestamp (seconds) |
-| Success check | `res.ok && !partialFailureError` | `res.ok && code === 0` |
-| Phone format | E.164 with `+` prefix | Digits only |
-| Additional data | `userIpAddress` only | `userAgent`, `pageUrl`, `pageReferrer` |
+| Aspect          | Google Ads                       | TikTok                                 |
+| --------------- | -------------------------------- | -------------------------------------- |
+| Auth            | OAuth 2.0 token refresh          | Static access token                    |
+| API format      | REST with custom headers         | REST with JSON body                    |
+| Time format     | `2026-01-10 12:00:00+00:00`      | Unix timestamp (seconds)               |
+| Success check   | `res.ok && !partialFailureError` | `res.ok && code === 0`                 |
+| Phone format    | E.164 with `+` prefix            | Digits only                            |
+| Additional data | `userIpAddress` only             | `userAgent`, `pageUrl`, `pageReferrer` |
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `src/lib/outbound/tiktok.ts` | Main TikTok API integration |
-| `src/app/api/test/tiktok/route.ts` | Manual testing endpoint |
+| File                                  | Purpose                                  |
+| ------------------------------------- | ---------------------------------------- |
+| `src/lib/outbound/tiktok.ts`          | Main TikTok API integration              |
+| `src/app/api/test/tiktok/route.ts`    | Manual testing endpoint                  |
 | `src/app/api/qstash/deliver/route.ts` | Delivery handler (calls sendTikTokEvent) |
-| `docs/TIKTOK_INTEGRATION.md` | This documentation |
-| `TIKTOK_INTEGRATION_PLAN.md` | Original implementation plan |
+| `docs/TIKTOK_INTEGRATION.md`          | This documentation                       |
+| `TIKTOK_INTEGRATION_PLAN.md`          | Original implementation plan             |

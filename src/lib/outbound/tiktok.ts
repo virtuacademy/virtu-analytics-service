@@ -137,8 +137,11 @@ function isAlreadyHashed(value: string): boolean {
  * Handles comma/space separated lists.
  */
 function extractEmailCandidate(value: string): string | null {
-  const candidates = value.split(/[,\s;]/).map(part => part.trim()).filter(Boolean);
-  return candidates.find(candidate => candidate.includes("@")) ?? null;
+  const candidates = value
+    .split(/[,\s;]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return candidates.find((candidate) => candidate.includes("@")) ?? null;
 }
 
 /**
@@ -251,7 +254,7 @@ function hashExternalId(value?: string | null): string | null {
 const DEFAULT_EVENT_MAPPING: Record<string, string> = {
   TRIAL_BOOKED: "StartTrial",
   TRIAL_RESCHEDULED: "SubmitForm",
-  APPOINTMENT_UPDATED: "Schedule"
+  APPOINTMENT_UPDATED: "Schedule",
   // TRIAL_CANCELED is intentionally omitted - we skip canceled events
 };
 
@@ -263,7 +266,7 @@ function parseEventMapping(value?: string | null): Record<string, string> {
   if (!value) return {};
   const map: Record<string, string> = {};
   for (const pair of value.split(",")) {
-    const [eventName, tiktokEvent] = pair.split("=").map(part => part.trim());
+    const [eventName, tiktokEvent] = pair.split("=").map((part) => part.trim());
     if (eventName && tiktokEvent) map[eventName] = tiktokEvent;
   }
   return map;
@@ -333,7 +336,7 @@ function buildUserObject(
   args: TikTokEventArgs,
   hashedEmail: string | null,
   hashedPhone: string | null,
-  hashedExternalId: string | null
+  hashedExternalId: string | null,
 ): Record<string, string> {
   const user: Record<string, string> = {};
 
@@ -428,7 +431,7 @@ export async function sendTikTokEvent(args: TikTokEventArgs): Promise<TikTokSend
     return {
       skipped: true,
       reason: "TIKTOK mock mode",
-      requestBody: JSON.stringify(args)
+      requestBody: JSON.stringify(args),
     };
   }
 
@@ -438,7 +441,7 @@ export async function sendTikTokEvent(args: TikTokEventArgs): Promise<TikTokSend
     return {
       skipped: true,
       reason: authResult.reason,
-      requestBody: JSON.stringify(args)
+      requestBody: JSON.stringify(args),
     };
   }
 
@@ -448,7 +451,7 @@ export async function sendTikTokEvent(args: TikTokEventArgs): Promise<TikTokSend
     return {
       skipped: true,
       reason: `No TikTok event mapping for: ${args.eventName ?? "(none)"}`,
-      requestBody: JSON.stringify(args)
+      requestBody: JSON.stringify(args),
     };
   }
 
@@ -467,7 +470,7 @@ export async function sendTikTokEvent(args: TikTokEventArgs): Promise<TikTokSend
     return {
       skipped: true,
       reason: "Missing ttclid/ttp and user identifiers (email/phone/external_id)",
-      requestBody: JSON.stringify(args)
+      requestBody: JSON.stringify(args),
     };
   }
 
@@ -479,7 +482,7 @@ export async function sendTikTokEvent(args: TikTokEventArgs): Promise<TikTokSend
     event: tiktokEventName,
     event_time: toUnixSeconds(args.eventTime),
     event_id: args.eventId,
-    user
+    user,
   };
 
   // Add page data if available
@@ -494,7 +497,7 @@ export async function sendTikTokEvent(args: TikTokEventArgs): Promise<TikTokSend
   const request: Record<string, unknown> = {
     event_source: "web",
     event_source_id: authResult.auth.pixelId,
-    data: [eventData]
+    data: [eventData],
   };
 
   // Add test event code if configured (for debugging in TikTok Events Manager)
@@ -511,10 +514,10 @@ export async function sendTikTokEvent(args: TikTokEventArgs): Promise<TikTokSend
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Access-Token": authResult.auth.accessToken
+        "Access-Token": authResult.auth.accessToken,
       },
       body: requestBody,
-      cache: "no-store"
+      cache: "no-store",
     });
 
     const text = await res.text();
