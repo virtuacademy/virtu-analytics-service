@@ -77,4 +77,15 @@ export const resolvers = {
         include: { deliveries: true },
       }),
   },
+  Attribution: {
+    firstTouchAt: (attrib: { firstTouchAt: Date }) => attrib.firstTouchAt.toISOString(),
+    lastTouchAt: (attrib: { lastTouchAt: Date }) => attrib.lastTouchAt.toISOString(),
+  },
+  CanonicalEvent: {
+    eventTime: (event: { eventTime: Date }) => event.eventTime.toISOString(),
+  },
+  Delivery: {
+    lastAttemptAt: (delivery: { lastAttemptAt: Date | null }) =>
+      delivery.lastAttemptAt ? delivery.lastAttemptAt.toISOString() : null,
+  },
 };

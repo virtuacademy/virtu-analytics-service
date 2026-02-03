@@ -24,7 +24,7 @@ High-level flow:
 - `value` is Acuity `amountPaid` (if present) and `currency` is `USD`.
 - Deliveries are queued only when `QSTASH_TOKEN` is set; `/api/qstash/deliver` also requires the QStash signing keys.
 - `_fbp` is synthesized and set as a first-party cookie when missing; `_fbc` is synthesized only when missing *and* `fbclid` is present (otherwise it remains unset).
-- Google Ads consent is currently hard-coded to `GRANTED` for both `adUserData` and `adPersonalization` (env vars in `.env.example` are not read by the code yet).
+- Google Ads consent is currently hard-coded to `GRANTED` for both `adUserData` and `adPersonalization`; `GOOGLE_ADS_AD_USER_DATA_CONSENT` and `GOOGLE_ADS_AD_PERSONALIZATION_CONSENT` in `.env.example` are not read by the code yet.
 
 ## What data we capture and why
 
@@ -58,7 +58,7 @@ Internal (signed):
 - `POST /api/qstash/deliver` - verifies QStash signature and sends outbound deliveries.
 
 Debug:
-- `GET|POST /api/graphql` - Apollo GraphQL endpoint to inspect attribution and deliveries (no auth).
+- `GET|POST /api/graphql` - Apollo GraphQL endpoint to inspect attribution and deliveries (no auth; returns PII).
 
 Testing:
 - `POST /api/test/meta` - manual Meta CAPI upload (requires `META_CAPI_TEST_SECRET`).
@@ -84,7 +84,7 @@ See `.env.example` for the full list. Key values:
 - QStash: `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`
 - Meta: `META_PIXEL_ID`, `META_CAPI_ACCESS_TOKEN`, `META_CAPI_EVENT_NAME(S)`, optional `META_CAPI_TEST_EVENT_CODE`, `META_CAPI_API_VERSION`, `META_CAPI_LDU_ENABLED`, `META_CAPI_PREDICTED_LTV`, `META_CAPI_TEST_SECRET`
 - HubSpot: `HUBSPOT_PRIVATE_APP_TOKEN`, `HUBSPOT_EVENT_NAMES`, optional `HUBSPOT_SOURCE_SYSTEM`
-- Google Ads: `GOOGLE_ADS_DEVELOPER_TOKEN`, OAuth creds, `GOOGLE_ADS_CUSTOMER_ID`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID`, `GOOGLE_ADS_CONVERSION_ACTION_ID(S)`, `GOOGLE_ADS_CONVERSION_ACTIONS` (per-event mapping), `GOOGLE_ADS_DEFAULT_PHONE_COUNTRY_CODE`, `GOOGLE_ADS_CONVERSION_TIMEZONE(_OFFSET)`, optional `GOOGLE_ADS_VALIDATE_ONLY`/`GOOGLE_ADS_JOB_ID`
+- Google Ads: `GOOGLE_ADS_DEVELOPER_TOKEN`, OAuth creds, `GOOGLE_ADS_CUSTOMER_ID`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID`, `GOOGLE_ADS_CONVERSION_ACTION_ID(S)`, `GOOGLE_ADS_CONVERSION_ACTIONS` (per-event mapping), `GOOGLE_ADS_DEFAULT_PHONE_COUNTRY_CODE`, `GOOGLE_ADS_CONVERSION_TIMEZONE(_OFFSET)`, `GOOGLE_ADS_AD_USER_DATA_CONSENT`, `GOOGLE_ADS_AD_PERSONALIZATION_CONSENT` (currently ignored by code), optional `GOOGLE_ADS_VALIDATE_ONLY`/`GOOGLE_ADS_JOB_ID`
 - TikTok: `TIKTOK_PIXEL_ID`, `TIKTOK_ACCESS_TOKEN`, optional `TIKTOK_EVENT_ACTIONS`, `TIKTOK_TEST_EVENT_CODE`, `TIKTOK_DEFAULT_PHONE_COUNTRY_CODE`
 - Optional: `META_CAPI_TEST_SECRET`, `GOOGLE_ADS_TEST_SECRET`, `HUBSPOT_TEST_SECRET`, `TIKTOK_TEST_SECRET` (test endpoints)
 - Optional: `OUTBOUND_MODE=mock` (skip outbound calls and mark deliveries success; HubSpot still requires envs or is skipped)
@@ -285,7 +285,7 @@ Notes:
 ## Delivery behavior (Meta, Google Ads, TikTok, HubSpot)
 
 General:
-- If `OUTBOUND_MODE=mock`, Meta/Google/TikTok deliveries are marked `SUCCESS` without external calls; HubSpot still requires its env vars or the delivery is marked `SKIPPED`.
+- If `OUTBOUND_MODE=mock`, all platform deliveries are marked `SUCCESS` without external calls (HubSpot env checks are bypassed in this mode).
 - If a platform is missing required env, the delivery is marked `SKIPPED` with a reason.
 - Deliveries are retried by QStash (re-sending hits this endpoint).
 
@@ -316,7 +316,7 @@ TikTok:
 
 HubSpot:
 - Uses the Custom Events API (Events v3 `send`) and maps canonical events via `HUBSPOT_EVENT_NAMES`.
-- For TRIAL_BOOKED, sends `email` + `utk` when available to associate the event to a contact.
+- Requires `email` or `utk` for any event; if both are available they are sent to associate the event to a contact.
 - Event properties: `event_id`, `source_system`, and default attribution fields like `hs_page_url`, `hs_referrer`, `hs_utm_source`, `hs_utm_medium`, `hs_utm_campaign`, `hs_utm_term`, `hs_utm_content`, `hs_user_agent`.
 
 ## GraphQL debug queries

@@ -51,7 +51,7 @@ Key env vars (see `.env.example` for the full list):
 - QStash: `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`
 - Meta: `META_PIXEL_ID`, `META_CAPI_ACCESS_TOKEN`, `META_CAPI_EVENT_NAME(S)`, optional `META_CAPI_TEST_EVENT_CODE`, `META_CAPI_API_VERSION`, `META_CAPI_LDU_ENABLED`, `META_CAPI_PREDICTED_LTV`
 - HubSpot: `HUBSPOT_PRIVATE_APP_TOKEN`, `HUBSPOT_EVENT_NAMES`, optional `HUBSPOT_SOURCE_SYSTEM`
-- Google Ads: `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_CLIENT_ID`, `GOOGLE_ADS_CLIENT_SECRET`, `GOOGLE_ADS_REFRESH_TOKEN`, `GOOGLE_ADS_CUSTOMER_ID`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID`, `GOOGLE_ADS_CONVERSION_ACTION_ID(S)`, `GOOGLE_ADS_DEFAULT_PHONE_COUNTRY_CODE`, timezone settings, optional `GOOGLE_ADS_VALIDATE_ONLY`/`GOOGLE_ADS_JOB_ID`
+- Google Ads: `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_CLIENT_ID`, `GOOGLE_ADS_CLIENT_SECRET`, `GOOGLE_ADS_REFRESH_TOKEN`, `GOOGLE_ADS_CUSTOMER_ID`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID`, `GOOGLE_ADS_CONVERSION_ACTION_ID(S)`, `GOOGLE_ADS_DEFAULT_PHONE_COUNTRY_CODE`, timezone settings, optional `GOOGLE_ADS_VALIDATE_ONLY`/`GOOGLE_ADS_JOB_ID`, consent settings (`GOOGLE_ADS_AD_USER_DATA_CONSENT`, `GOOGLE_ADS_AD_PERSONALIZATION_CONSENT`, currently ignored by code)
 - TikTok: `TIKTOK_PIXEL_ID`, `TIKTOK_ACCESS_TOKEN`, optional `TIKTOK_EVENT_ACTIONS`, `TIKTOK_TEST_EVENT_CODE`, `TIKTOK_DEFAULT_PHONE_COUNTRY_CODE`
 - Optional: `META_CAPI_TEST_SECRET`, `GOOGLE_ADS_TEST_SECRET`, `HUBSPOT_TEST_SECRET`, and `TIKTOK_TEST_SECRET` for test endpoints
 - Optional: `OUTBOUND_MODE=mock` to skip real delivery, `AUTH_PASSWORD` to protect the dashboard
@@ -61,7 +61,7 @@ Key env vars (see `.env.example` for the full list):
 - `POST /api/attrib/ingest`
 - `POST /api/webhooks/acuity`
 - `POST /api/qstash/deliver`
-- `GET|POST /api/graphql`
+- `GET|POST /api/graphql` (debug; unauthenticated, returns PII)
 - `POST /api/test/meta` (manual testing)
 - `POST /api/test/google-ads` (manual testing)
 - `POST /api/test/hubspot` (manual testing)
@@ -70,13 +70,14 @@ Key env vars (see `.env.example` for the full list):
 
 ## Documentation
 
-- Architecture, Webflow/Acuity setup, and data flow: `docs/analytics-v1.md`
+- Architecture, Webflow/Acuity setup, and data flow: `analytics-v1.md`
 
 ## Useful commands
 
 - `npm run dev`
 - `npm run build`
 - `npm run lint`
+- `npm run typecheck`
 - `npm run prisma:generate`
 - `npm run prisma:migrate`
 - `npm run prisma:studio`
