@@ -121,7 +121,7 @@ export async function POST(req: NextRequest) {
     userIpAddress: typeof body.userIpAddress === "string" ? body.userIpAddress.trim() : undefined,
     userAgent: typeof body.userAgent === "string" ? body.userAgent.trim() : undefined,
     pageUrl: typeof body.pageUrl === "string" ? body.pageUrl.trim() : undefined,
-    pageReferrer: typeof body.pageReferrer === "string" ? body.pageReferrer.trim() : undefined
+    pageReferrer: typeof body.pageReferrer === "string" ? body.pageReferrer.trim() : undefined,
   });
 
   if (result.skipped) {
@@ -129,7 +129,7 @@ export async function POST(req: NextRequest) {
       ok: false,
       skipped: true,
       reason: result.reason,
-      requestBody: result.requestBody
+      requestBody: result.requestBody,
     });
   }
 
@@ -137,6 +137,6 @@ export async function POST(req: NextRequest) {
     ok: result.ok,
     status: result.status,
     body: result.body,
-    requestBody: result.requestBody
+    requestBody: result.requestBody,
   });
 }

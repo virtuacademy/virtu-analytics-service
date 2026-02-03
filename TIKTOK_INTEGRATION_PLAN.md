@@ -9,12 +9,14 @@ This plan outlines completing the TikTok Events API integration to mirror how th
 ## TikTok Events API Reference
 
 ### API Endpoint
+
 ```
 POST https://business-api.tiktok.com/open_api/v1.3/event/track/
 ```
 
 ### Request Format
-*(Verified from [tiktok/gtm-template-eapi](https://github.com/tiktok/gtm-template-eapi) - TikTok's official GTM template)*
+
+_(Verified from [tiktok/gtm-template-eapi](https://github.com/tiktok/gtm-template-eapi) - TikTok's official GTM template)_
 
 ```json
 {
@@ -50,34 +52,39 @@ POST https://business-api.tiktok.com/open_api/v1.3/event/track/
 ```
 
 ### Authentication
+
 - **Header**: `Access-Token: <access_token>`
 - **Header**: `Content-Type: application/json`
 
 ### Event Name Mapping (Matching Google Ads Pattern)
 
-| CanonicalEventName    | TikTok Event      | Notes                                    |
-|-----------------------|-------------------|------------------------------------------|
-| `TRIAL_BOOKED`        | `SubmitForm`      | Lead/form submission for trial booking   |
-| `TRIAL_RESCHEDULED`   | `SubmitForm`      | Treated as form resubmission             |
-| `TRIAL_CANCELED`      | (skip)            | No TikTok event for cancellations        |
-| `APPOINTMENT_UPDATED` | `Schedule`        | Regular appointment scheduling           |
+| CanonicalEventName    | TikTok Event | Notes                                  |
+| --------------------- | ------------ | -------------------------------------- |
+| `TRIAL_BOOKED`        | `SubmitForm` | Lead/form submission for trial booking |
+| `TRIAL_RESCHEDULED`   | `SubmitForm` | Treated as form resubmission           |
+| `TRIAL_CANCELED`      | (skip)       | No TikTok event for cancellations      |
+| `APPOINTMENT_UPDATED` | `Schedule`   | Regular appointment scheduling         |
 
 **Alternative mapping option**: Use `CompleteRegistration` for trials if optimizing for registrations.
 
 ### Hashing Requirements (SHA256)
+
 Fields that **MUST** be hashed before sending:
+
 - `email` - lowercase, trim, SHA256
 - `phone` - digits only (with country code), SHA256
 - `external_id` - SHA256
 - (Optional) `first_name`, `last_name`, `zip_code` - lowercase, trim, SHA256
 
 Fields that should **NOT** be hashed:
+
 - `ttclid` - sent as-is
 - `ip` - sent as-is
 - `user_agent` - sent as-is
 - `event_id` - sent as-is
 
 ### Deduplication
+
 TikTok deduplicates events using `event_id` within a 5-minute window. The same `event_id` sent via Pixel and Events API will be merged.
 
 ---
@@ -99,6 +106,7 @@ TIKTOK_EVENT_ACTIONS=TRIAL_BOOKED=SubmitForm,TRIAL_RESCHEDULED=SubmitForm,APPOIN
 ```
 
 **How to get credentials:**
+
 1. Go to TikTok Ads Manager → Tools → Events
 2. Select your Pixel → Settings
 3. Click "Generate Access Token"
@@ -114,7 +122,7 @@ Replace the stub with a full implementation following the Google Ads pattern.
 ```typescript
 type TikTokEventArgs = {
   eventId: string;
-  eventName?: string | null;      // CanonicalEventName
+  eventName?: string | null; // CanonicalEventName
   eventTime: Date;
   conversionValue?: number | null;
   currencyCode?: string | null;
@@ -125,7 +133,7 @@ type TikTokEventArgs = {
   // User identifiers (will be hashed)
   email?: string | null;
   phone?: string | null;
-  externalId?: string | null;     // e.g., va_attrib token
+  externalId?: string | null; // e.g., va_attrib token
 
   // Context (not hashed)
   userIpAddress?: string | null;
@@ -153,8 +161,9 @@ function hashPhone(phone: string | null, defaultCountryCode: string | null): str
 function resolveTikTokEventName(canonicalName: string | null): string | null;
 
 // 3. Build auth check
-function buildTikTokAuth(): { ok: true; pixelId: string; accessToken: string }
-                          | { ok: false; reason: string };
+function buildTikTokAuth():
+  | { ok: true; pixelId: string; accessToken: string }
+  | { ok: false; reason: string };
 
 // 4. Build request payload
 function buildTikTokEventPayload(args: TikTokEventArgs): object;
@@ -205,7 +214,7 @@ function parseEventMapping(value?: string | null): Record<string, string> {
   if (!value) return {};
   const map: Record<string, string> = {};
   for (const pair of value.split(",")) {
-    const [eventName, tiktokEvent] = pair.split("=").map(p => p.trim());
+    const [eventName, tiktokEvent] = pair.split("=").map((p) => p.trim());
     if (eventName && tiktokEvent) map[eventName] = tiktokEvent;
   }
   return map;
@@ -223,7 +232,7 @@ function resolveTikTokEventName(canonicalName?: string | null): string | null {
   const defaults: Record<string, string> = {
     TRIAL_BOOKED: "SubmitForm",
     TRIAL_RESCHEDULED: "SubmitForm",
-    APPOINTMENT_UPDATED: "Schedule"
+    APPOINTMENT_UPDATED: "Schedule",
   };
 
   if (canonicalName && defaults[canonicalName]) {
@@ -233,7 +242,9 @@ function resolveTikTokEventName(canonicalName?: string | null): string | null {
   return null; // TRIAL_CANCELED and unknown events are skipped
 }
 
-function buildTikTokAuth(): { ok: true; pixelId: string; accessToken: string } | { ok: false; reason: string } {
+function buildTikTokAuth():
+  | { ok: true; pixelId: string; accessToken: string }
+  | { ok: false; reason: string } {
   const pixelId = process.env.TIKTOK_PIXEL_ID;
   const accessToken = process.env.TIKTOK_ACCESS_TOKEN;
 
@@ -269,7 +280,7 @@ export async function sendTikTokEvent(args: TikTokEventArgs): Promise<TikTokSend
     return {
       skipped: true,
       reason: `No TikTok event mapping for: ${args.eventName}`,
-      requestBody: JSON.stringify(args)
+      requestBody: JSON.stringify(args),
     };
   }
 
@@ -283,7 +294,7 @@ export async function sendTikTokEvent(args: TikTokEventArgs): Promise<TikTokSend
     return {
       skipped: true,
       reason: "Missing ttclid and user identifiers (email/phone)",
-      requestBody: JSON.stringify(args)
+      requestBody: JSON.stringify(args),
     };
   }
 
@@ -301,14 +312,14 @@ export async function sendTikTokEvent(args: TikTokEventArgs): Promise<TikTokSend
     event: tiktokEventName,
     event_time: toUnixSeconds(args.eventTime),
     event_id: args.eventId,
-    user
+    user,
   };
 
   // Add page data if available
   if (args.pageUrl || args.pageReferrer) {
     eventData.page = {
       ...(args.pageUrl && { url: args.pageUrl }),
-      ...(args.pageReferrer && { referrer: args.pageReferrer })
+      ...(args.pageReferrer && { referrer: args.pageReferrer }),
     };
   }
 
@@ -316,7 +327,7 @@ export async function sendTikTokEvent(args: TikTokEventArgs): Promise<TikTokSend
   if (args.conversionValue != null && Number.isFinite(args.conversionValue)) {
     eventData.properties = {
       value: args.conversionValue,
-      currency: args.currencyCode || "USD"
+      currency: args.currencyCode || "USD",
     };
   }
 
@@ -325,7 +336,7 @@ export async function sendTikTokEvent(args: TikTokEventArgs): Promise<TikTokSend
     event_source: "web",
     event_source_id: authResult.pixelId,
     partner_name: "VirtuAnalytics",
-    data: [eventData]
+    data: [eventData],
   };
 
   // Add test event code if configured
@@ -342,10 +353,10 @@ export async function sendTikTokEvent(args: TikTokEventArgs): Promise<TikTokSend
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Access-Token": authResult.accessToken
+        "Access-Token": authResult.accessToken,
       },
       body: requestBody,
-      cache: "no-store"
+      cache: "no-store",
     });
 
     const text = await res.text();
@@ -357,7 +368,8 @@ export async function sendTikTokEvent(args: TikTokEventArgs): Promise<TikTokSend
     }
 
     // TikTok returns { code: 0, message: "OK" } on success
-    const responseCode = parsed && typeof parsed === "object" ? (parsed as { code?: number }).code : null;
+    const responseCode =
+      parsed && typeof parsed === "object" ? (parsed as { code?: number }).code : null;
     const ok = res.ok && responseCode === 0;
     const body = parsed ? JSON.stringify(parsed) : text;
 
@@ -380,9 +392,13 @@ Update `src/app/api/qstash/deliver/route.ts` to pass all required arguments to `
 if (d.platform === "TIKTOK") {
   const r = await sendTikTokEvent({
     eventId: ce.eventId,
-    ttclid: appt?.ttclid ?? attrib?.ttclid ?? null
+    ttclid: appt?.ttclid ?? attrib?.ttclid ?? null,
   });
-  await mark({ status: r.skipped ? "SKIPPED" : "FAILED", responseBody: r.reason, requestBody: r.requestBody });
+  await mark({
+    status: r.skipped ? "SKIPPED" : "FAILED",
+    responseBody: r.reason,
+    requestBody: r.requestBody,
+  });
 }
 
 // Updated:
@@ -403,7 +419,7 @@ if (d.platform === "TIKTOK") {
       userIpAddress: ip,
       userAgent: userAgent,
       pageUrl: eventSourceUrl,
-      pageReferrer: attrib?.lastReferrer ?? null
+      pageReferrer: attrib?.lastReferrer ?? null,
     });
 
     if (r.skipped) {
@@ -413,7 +429,7 @@ if (d.platform === "TIKTOK") {
         status: r.ok ? "SUCCESS" : "FAILED",
         responseCode: r.status,
         responseBody: r.body,
-        requestBody: r.requestBody
+        requestBody: r.requestBody,
       });
     }
   }
@@ -455,7 +471,7 @@ export async function POST(req: NextRequest) {
     userIpAddress: body.userIpAddress ?? null,
     userAgent: body.userAgent ?? null,
     pageUrl: body.pageUrl ?? null,
-    pageReferrer: body.pageReferrer ?? null
+    pageReferrer: body.pageReferrer ?? null,
   });
 
   return NextResponse.json(result);
@@ -463,6 +479,7 @@ export async function POST(req: NextRequest) {
 ```
 
 **Add to `.env`:**
+
 ```env
 TIKTOK_TEST_SECRET=your-test-secret-here
 ```
@@ -476,14 +493,14 @@ Add TikTok environment variables to any README or documentation:
 ```markdown
 ### TikTok Events API
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `TIKTOK_PIXEL_ID` | Yes | Your TikTok Pixel ID (event_source_id) |
-| `TIKTOK_ACCESS_TOKEN` | Yes | Events API access token from Ads Manager |
-| `TIKTOK_TEST_EVENT_CODE` | No | Test event code for debugging |
-| `TIKTOK_DEFAULT_PHONE_COUNTRY_CODE` | No | Default country code (e.g., "1" for US) |
-| `TIKTOK_EVENT_ACTIONS` | No | Custom event mapping (e.g., "TRIAL_BOOKED=SubmitForm") |
-| `TIKTOK_TEST_SECRET` | No | Secret for /api/test/tiktok endpoint |
+| Variable                            | Required | Description                                            |
+| ----------------------------------- | -------- | ------------------------------------------------------ |
+| `TIKTOK_PIXEL_ID`                   | Yes      | Your TikTok Pixel ID (event_source_id)                 |
+| `TIKTOK_ACCESS_TOKEN`               | Yes      | Events API access token from Ads Manager               |
+| `TIKTOK_TEST_EVENT_CODE`            | No       | Test event code for debugging                          |
+| `TIKTOK_DEFAULT_PHONE_COUNTRY_CODE` | No       | Default country code (e.g., "1" for US)                |
+| `TIKTOK_EVENT_ACTIONS`              | No       | Custom event mapping (e.g., "TRIAL_BOOKED=SubmitForm") |
+| `TIKTOK_TEST_SECRET`                | No       | Secret for /api/test/tiktok endpoint                   |
 ```
 
 ---
@@ -513,25 +530,25 @@ Add TikTok environment variables to any README or documentation:
 
 ## Feature Parity Matrix
 
-| Feature | Google Ads | TikTok (Target) |
-|---------|-----------|-----------------|
-| Auth validation | ✓ `buildAuth()` | ✓ `buildTikTokAuth()` |
-| Missing env handling | ✓ Returns skipped | ✓ Returns skipped |
-| Mock mode support | ✓ OUTBOUND_MODE=mock | ✓ OUTBOUND_MODE=mock |
-| Event name mapping | ✓ GOOGLE_ADS_CONVERSION_ACTIONS | ✓ TIKTOK_EVENT_ACTIONS |
-| Email hashing | ✓ SHA256 + Gmail normalization | ✓ SHA256 |
-| Phone hashing | ✓ E.164 + SHA256 | ✓ Digits + country code + SHA256 |
-| Click ID support | ✓ gclid/gbraid/wbraid | ✓ ttclid |
-| Skip if no identifiers | ✓ | ✓ |
-| Request body logging | ✓ | ✓ |
-| Response body logging | ✓ | ✓ |
-| Partial failure handling | ✓ CLICK_NOT_FOUND | ✓ Check `code: 0` |
-| Test endpoint | ✓ /api/test/google-ads | ✓ /api/test/tiktok |
-| Conversion value | ✓ | ✓ |
-| IP address | ✓ | ✓ |
-| User agent | ✗ | ✓ |
-| Page URL | ✗ | ✓ |
-| Page referrer | ✗ | ✓ |
+| Feature                  | Google Ads                      | TikTok (Target)                  |
+| ------------------------ | ------------------------------- | -------------------------------- |
+| Auth validation          | ✓ `buildAuth()`                 | ✓ `buildTikTokAuth()`            |
+| Missing env handling     | ✓ Returns skipped               | ✓ Returns skipped                |
+| Mock mode support        | ✓ OUTBOUND_MODE=mock            | ✓ OUTBOUND_MODE=mock             |
+| Event name mapping       | ✓ GOOGLE_ADS_CONVERSION_ACTIONS | ✓ TIKTOK_EVENT_ACTIONS           |
+| Email hashing            | ✓ SHA256 + Gmail normalization  | ✓ SHA256                         |
+| Phone hashing            | ✓ E.164 + SHA256                | ✓ Digits + country code + SHA256 |
+| Click ID support         | ✓ gclid/gbraid/wbraid           | ✓ ttclid                         |
+| Skip if no identifiers   | ✓                               | ✓                                |
+| Request body logging     | ✓                               | ✓                                |
+| Response body logging    | ✓                               | ✓                                |
+| Partial failure handling | ✓ CLICK_NOT_FOUND               | ✓ Check `code: 0`                |
+| Test endpoint            | ✓ /api/test/google-ads          | ✓ /api/test/tiktok               |
+| Conversion value         | ✓                               | ✓                                |
+| IP address               | ✓                               | ✓                                |
+| User agent               | ✗                               | ✓                                |
+| Page URL                 | ✗                               | ✓                                |
+| Page referrer            | ✗                               | ✓                                |
 
 ---
 
@@ -611,13 +628,13 @@ curl -X POST https://analytics.virtu.academy/api/test/tiktok \
 
 ### Common TikTok API Response Codes
 
-| Code | Message | Handling |
-|------|---------|----------|
-| 0 | OK | Success |
-| 40000 | Invalid parameter | Check request format |
-| 40001 | Invalid access token | Regenerate token |
-| 40002 | Rate limit exceeded | Implement backoff |
-| 40100 | Pixel ID not found | Verify TIKTOK_PIXEL_ID |
+| Code  | Message              | Handling               |
+| ----- | -------------------- | ---------------------- |
+| 0     | OK                   | Success                |
+| 40000 | Invalid parameter    | Check request format   |
+| 40001 | Invalid access token | Regenerate token       |
+| 40002 | Rate limit exceeded  | Implement backoff      |
+| 40100 | Pixel ID not found   | Verify TIKTOK_PIXEL_ID |
 
 ### Skip Conditions (mark as SKIPPED)
 
@@ -632,12 +649,12 @@ curl -X POST https://analytics.virtu.academy/api/test/tiktok \
 
 ### Primary Sources (Verified - Content Successfully Fetched)
 
-| Source | Type | What Was Extracted |
-|--------|------|-------------------|
-| [tiktok/gtm-template-eapi](https://github.com/tiktok/gtm-template-eapi) | **Official TikTok repo** | Complete request structure, event mapping, hashing logic, `partner_name` field |
-| [tiktok/tiktok-business-api-sdk](https://github.com/tiktok/tiktok-business-api-sdk) | **Official TikTok SDK** | Base URL, endpoint patterns, API version v1.3 |
-| [stape-io/tiktok-tag](https://github.com/stape-io/tiktok-tag) | Third-party GTM tag | Implementation reference, user data fields, cookie handling |
-| [VictorValar/python-tiktok-events-api](https://github.com/VictorValar/python-tiktok-events-api) | Third-party Python lib | Schema structure, Pydantic models |
+| Source                                                                                          | Type                     | What Was Extracted                                                             |
+| ----------------------------------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------ |
+| [tiktok/gtm-template-eapi](https://github.com/tiktok/gtm-template-eapi)                         | **Official TikTok repo** | Complete request structure, event mapping, hashing logic, `partner_name` field |
+| [tiktok/tiktok-business-api-sdk](https://github.com/tiktok/tiktok-business-api-sdk)             | **Official TikTok SDK**  | Base URL, endpoint patterns, API version v1.3                                  |
+| [stape-io/tiktok-tag](https://github.com/stape-io/tiktok-tag)                                   | Third-party GTM tag      | Implementation reference, user data fields, cookie handling                    |
+| [VictorValar/python-tiktok-events-api](https://github.com/VictorValar/python-tiktok-events-api) | Third-party Python lib   | Schema structure, Pydantic models                                              |
 
 ### Secondary Sources (Referenced but not directly fetched - 403 errors)
 

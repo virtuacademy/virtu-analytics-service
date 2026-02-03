@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { Receiver } from "@upstash/qstash";
 import { prisma } from "@/lib/prisma";
 import { sendMetaCapi } from "@/lib/outbound/meta";
-import { submitHubSpotForm } from "@/lib/outbound/hubspot";
+import { sendHubSpotEvent } from "@/lib/outbound/hubspot";
 import { sendGoogleAdsClickConversion } from "@/lib/outbound/googleAds";
 import { sendTikTokEvent } from "@/lib/outbound/tiktok";
 
@@ -123,41 +123,36 @@ export async function POST(req: NextRequest) {
       }
 
       if (d.platform === "HUBSPOT") {
-        const portalId = process.env.HUBSPOT_PORTAL_ID!;
-        const formGuid = process.env.HUBSPOT_TRIAL_FORM_GUID!;
-        const token = process.env.HUBSPOT_PRIVATE_APP_TOKEN!;
-        if (!portalId || !formGuid || !token) {
-          await mark({ status: "SKIPPED", responseBody: "Missing HubSpot env" });
-        } else if (mockOutbound) {
+        if (mockOutbound) {
           await mark({ status: "SUCCESS", responseBody: "mock_hubspot" });
         } else {
-          const r = await submitHubSpotForm({
-            portalId,
-            formGuid,
-            accessToken: token,
+          const r = await sendHubSpotEvent({
+            eventId: ce.eventId,
+            canonicalEventName: ce.name,
+            eventTime: ce.eventTime,
             email,
-            fields: {
-              email: email ?? "",
-              acuity_appointment_id: ce.appointmentId ?? "",
-              va_attrib: ce.attributionTok ?? "",
-              utm_source: attrib?.utmSource ?? "",
-              utm_medium: attrib?.utmMedium ?? "",
-              utm_campaign: attrib?.utmCampaign ?? "",
-              gclid: appt?.gclid ?? attrib?.gclid ?? "",
-              ttclid: appt?.ttclid ?? attrib?.ttclid ?? "",
-            },
-            hutk: attrib?.hubspotutk ?? null,
-            pageUri: attrib?.lastUrl ?? null,
-            pageName: null,
-            ipAddress: ip,
+            utk: attrib?.hubspotutk ?? null,
+            pageUrl: attrib?.lastUrl ?? null,
+            referrer: attrib?.lastReferrer ?? null,
+            userAgent: session?.uaFirst ?? attrib?.userAgent ?? null,
+            utmSource: attrib?.utmSource ?? null,
+            utmMedium: attrib?.utmMedium ?? null,
+            utmCampaign: attrib?.utmCampaign ?? null,
+            utmTerm: attrib?.utmTerm ?? null,
+            utmContent: attrib?.utmContent ?? null,
+            sourceSystem: process.env.HUBSPOT_SOURCE_SYSTEM ?? "attrib.virtu.academy",
           });
 
-          await mark({
-            status: r.ok ? "SUCCESS" : "FAILED",
-            responseCode: r.status,
-            responseBody: r.body,
-            requestBody: r.requestBody,
-          });
+          if (r.skipped) {
+            await mark({ status: "SKIPPED", responseBody: r.reason });
+          } else {
+            await mark({
+              status: r.ok ? "SUCCESS" : "FAILED",
+              responseCode: r.status,
+              responseBody: r.body,
+              requestBody: r.requestBody,
+            });
+          }
         }
       }
 
