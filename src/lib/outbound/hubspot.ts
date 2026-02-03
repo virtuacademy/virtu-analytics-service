@@ -61,12 +61,13 @@ function resolveHubSpotEventName(canonicalEventName?: string | null): string | n
 function compactProperties(
   properties: Record<string, string | number | null | undefined>,
 ): Record<string, string | number> {
-  const entries = Object.entries(properties).filter(([, value]) => {
-    if (value === null || value === undefined) return false;
-    if (typeof value === "string" && value.trim() === "") return false;
-    return true;
-  });
-  return Object.fromEntries(entries);
+  const compact: Record<string, string | number> = {};
+  for (const [key, value] of Object.entries(properties)) {
+    if (value === null || value === undefined) continue;
+    if (typeof value === "string" && value.trim() === "") continue;
+    compact[key] = value;
+  }
+  return compact;
 }
 
 export async function sendHubSpotEvent(args: HubSpotEventArgs): Promise<HubSpotSendResult> {
