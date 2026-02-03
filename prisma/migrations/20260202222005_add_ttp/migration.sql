@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "CanonicalEventName" ADD VALUE 'APPOINTMENT_BOOKED';
