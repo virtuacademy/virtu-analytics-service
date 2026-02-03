@@ -83,10 +83,10 @@ See `.env.example` for the full list. Key values:
 - Acuity: `ACUITY_USER_ID`, `ACUITY_API_KEY`, intake field IDs, `ACUITY_TRIAL_APPOINTMENT_TYPE_IDS` (comma-separated), `ACUITY_TRIAL_APPOINTMENT_TYPE_ID` (legacy fallback), `ACUITY_WEBHOOK_FORWARD_URL` (optional legacy forward)
 - QStash: `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`
 - Meta: `META_PIXEL_ID`, `META_CAPI_ACCESS_TOKEN`, `META_CAPI_EVENT_NAME(S)`, optional `META_CAPI_TEST_EVENT_CODE`, `META_CAPI_API_VERSION`, `META_CAPI_LDU_ENABLED`, `META_CAPI_PREDICTED_LTV`, `META_CAPI_TEST_SECRET`
-- HubSpot: `HUBSPOT_PORTAL_ID`, `HUBSPOT_TRIAL_FORM_GUID`, `HUBSPOT_PRIVATE_APP_TOKEN`
+- HubSpot: `HUBSPOT_PRIVATE_APP_TOKEN`, `HUBSPOT_EVENT_NAMES`, optional `HUBSPOT_SOURCE_SYSTEM`
 - Google Ads: `GOOGLE_ADS_DEVELOPER_TOKEN`, OAuth creds, `GOOGLE_ADS_CUSTOMER_ID`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID`, `GOOGLE_ADS_CONVERSION_ACTION_ID(S)`, `GOOGLE_ADS_CONVERSION_ACTIONS` (per-event mapping), `GOOGLE_ADS_DEFAULT_PHONE_COUNTRY_CODE`, `GOOGLE_ADS_CONVERSION_TIMEZONE(_OFFSET)`, optional `GOOGLE_ADS_VALIDATE_ONLY`/`GOOGLE_ADS_JOB_ID`
 - TikTok: `TIKTOK_PIXEL_ID`, `TIKTOK_ACCESS_TOKEN`, optional `TIKTOK_EVENT_ACTIONS`, `TIKTOK_TEST_EVENT_CODE`, `TIKTOK_DEFAULT_PHONE_COUNTRY_CODE`
-- Optional: `META_CAPI_TEST_SECRET`, `GOOGLE_ADS_TEST_SECRET`, `TIKTOK_TEST_SECRET` (test endpoints)
+- Optional: `META_CAPI_TEST_SECRET`, `GOOGLE_ADS_TEST_SECRET`, `HUBSPOT_TEST_SECRET`, `TIKTOK_TEST_SECRET` (test endpoints)
 - Optional: `OUTBOUND_MODE=mock` (skip outbound calls and mark deliveries success; HubSpot still requires envs or is skipped)
 - Optional: `AUTH_PASSWORD` (protects the dashboard; login at `/login`)
 
@@ -315,8 +315,9 @@ TikTok:
 - Sends `ttclid`/`_ttp` when present plus hashed email/phone/external id.
 
 HubSpot:
-- Uses the authenticated "secure submit" endpoint.
-- Fields sent: `email`, `acuity_appointment_id`, `va_attrib`, `utm_source`, `utm_medium`, `utm_campaign`, `gclid`, `ttclid`.
+- Uses the Custom Events API (Events v3 `send`) and maps canonical events via `HUBSPOT_EVENT_NAMES`.
+- For TRIAL_BOOKED, sends `email` + `utk` when available to associate the event to a contact.
+- Event properties: `event_id`, `source_system`, and default attribution fields like `hs_page_url`, `hs_referrer`, `hs_utm_source`, `hs_utm_medium`, `hs_utm_campaign`, `hs_utm_term`, `hs_utm_content`, `hs_user_agent`.
 
 ## GraphQL debug queries
 
@@ -346,6 +347,7 @@ query ($appointmentId: ID!) {
 
 - `POST /api/test/meta` (requires `META_CAPI_TEST_SECRET` via header or `?secret=...`)
 - `POST /api/test/google-ads` (requires `GOOGLE_ADS_TEST_SECRET` via header or `?secret=...`)
+- `POST /api/test/hubspot` (requires `HUBSPOT_TEST_SECRET` via header or `?secret=...`)
 - `POST /api/test/tiktok` (requires `TIKTOK_TEST_SECRET` via header or `?secret=...`)
 
 ## How it all works together

@@ -1,34 +1,125 @@
-export async function submitHubSpotForm(args: {
-  portalId: string;
-  formGuid: string;
-  accessToken: string;
+type HubSpotEventArgs = {
+  eventId: string;
+  canonicalEventName?: string | null;
+  eventTime: Date;
   email?: string | null;
-  fields: Record<string, string | number | null | undefined>;
-  hutk?: string | null;
-  pageUri?: string | null;
-  pageName?: string | null;
-  ipAddress?: string | null;
-}) {
-  const url = `https://api.hubapi.com/submissions/v3/integration/secure/submit/${encodeURIComponent(args.portalId)}/${encodeURIComponent(args.formGuid)}`;
+  utk?: string | null;
+  pageUrl?: string | null;
+  referrer?: string | null;
+  userAgent?: string | null;
+  utmSource?: string | null;
+  utmMedium?: string | null;
+  utmCampaign?: string | null;
+  utmTerm?: string | null;
+  utmContent?: string | null;
+  sourceSystem?: string | null;
+};
 
-  const body = {
-    submittedAt: Date.now(),
-    fields: Object.entries(args.fields)
-      .filter(([, v]) => v !== null && v !== undefined && v !== "")
-      .map(([name, value]) => ({ name, value: String(value) })),
-    context: {
-      hutk: args.hutk ?? undefined,
-      pageUri: args.pageUri ?? undefined,
-      pageName: args.pageName ?? undefined,
-      ipAddress: args.ipAddress ?? undefined,
-    },
+type HubSpotSendResult =
+  | { skipped: true; reason: string }
+  | { skipped: false; ok: boolean; status: number; body: string; requestBody: string };
+
+function normalizeValue(value?: string | null): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function extractEmailCandidate(value: string): string | null {
+  const candidates = value
+    .split(/[,\s;]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return candidates.find((candidate) => candidate.includes("@")) ?? null;
+}
+
+function normalizeEmail(value?: string | null): string | null {
+  if (!value) return null;
+  const candidate = extractEmailCandidate(value);
+  return candidate ? candidate.trim() : null;
+}
+
+function parseEventNameMap(value?: string | null): Record<string, string> {
+  if (!value) return {};
+  const map: Record<string, string> = {};
+  for (const pair of value.split(",")) {
+    const [eventName, hubspotEvent] = pair.split("=").map((part) => part.trim());
+    if (eventName && hubspotEvent) map[eventName] = hubspotEvent;
+  }
+  return map;
+}
+
+function resolveHubSpotEventName(canonicalEventName?: string | null): string | null {
+  const mapping = parseEventNameMap(process.env.HUBSPOT_EVENT_NAMES);
+  const hasMapping = Object.keys(mapping).length > 0;
+  if (canonicalEventName && mapping[canonicalEventName]) {
+    return mapping[canonicalEventName];
+  }
+  if (hasMapping) return null;
+  return null;
+}
+
+function compactProperties(
+  properties: Record<string, string | number | null | undefined>,
+): Record<string, string | number> {
+  const entries = Object.entries(properties).filter(([, value]) => {
+    if (value === null || value === undefined) return false;
+    if (typeof value === "string" && value.trim() === "") return false;
+    return true;
+  });
+  return Object.fromEntries(entries);
+}
+
+export async function sendHubSpotEvent(args: HubSpotEventArgs): Promise<HubSpotSendResult> {
+  const accessToken = process.env.HUBSPOT_PRIVATE_APP_TOKEN;
+  if (!accessToken) {
+    return { skipped: true, reason: "Missing env: HUBSPOT_PRIVATE_APP_TOKEN" };
+  }
+
+  const mappingRaw = process.env.HUBSPOT_EVENT_NAMES;
+  if (!mappingRaw || !mappingRaw.trim()) {
+    return { skipped: true, reason: "Missing env: HUBSPOT_EVENT_NAMES" };
+  }
+
+  const eventName = resolveHubSpotEventName(args.canonicalEventName);
+  if (!eventName) {
+    return {
+      skipped: true,
+      reason: `No HubSpot event mapping for ${args.canonicalEventName ?? "event"}`,
+    };
+  }
+
+  const email = normalizeEmail(args.email);
+  const utk = normalizeValue(args.utk);
+  if (!email && !utk) {
+    return { skipped: true, reason: "Missing email/utk for HubSpot event" };
+  }
+
+  const properties = compactProperties({
+    event_id: args.eventId,
+    source_system: normalizeValue(args.sourceSystem),
+    hs_page_url: normalizeValue(args.pageUrl),
+    hs_referrer: normalizeValue(args.referrer),
+    hs_utm_source: normalizeValue(args.utmSource),
+    hs_utm_medium: normalizeValue(args.utmMedium),
+    hs_utm_campaign: normalizeValue(args.utmCampaign),
+    hs_utm_term: normalizeValue(args.utmTerm),
+    hs_utm_content: normalizeValue(args.utmContent),
+    hs_user_agent: normalizeValue(args.userAgent),
+  });
+
+  const body: Record<string, unknown> = {
+    eventName,
+    occurredAt: args.eventTime.toISOString(),
+    properties,
   };
+  if (email) body.email = email;
+  if (utk) body.utk = utk;
   const requestBody = JSON.stringify(body);
 
-  const res = await fetch(url, {
+  const res = await fetch("https://api.hubapi.com/events/v3/send", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${args.accessToken}`,
+      Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
     body: requestBody,
@@ -36,5 +127,5 @@ export async function submitHubSpotForm(args: {
   });
 
   const text = await res.text();
-  return { ok: res.ok, status: res.status, body: text, requestBody };
+  return { skipped: false, ok: res.ok, status: res.status, body: text, requestBody };
 }
