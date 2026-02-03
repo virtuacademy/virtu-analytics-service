@@ -35,7 +35,7 @@ function extractEmailCandidate(value: string): string | null {
 function normalizeEmail(value?: string | null): string | null {
   if (!value) return null;
   const candidate = extractEmailCandidate(value);
-  return candidate ? candidate.trim() : null;
+  return candidate ? candidate.trim().toLowerCase() : null;
 }
 
 function parseEventNameMap(value?: string | null): Record<string, string> {
@@ -50,11 +50,9 @@ function parseEventNameMap(value?: string | null): Record<string, string> {
 
 function resolveHubSpotEventName(canonicalEventName?: string | null): string | null {
   const mapping = parseEventNameMap(process.env.HUBSPOT_EVENT_NAMES);
-  const hasMapping = Object.keys(mapping).length > 0;
   if (canonicalEventName && mapping[canonicalEventName]) {
     return mapping[canonicalEventName];
   }
-  if (hasMapping) return null;
   return null;
 }
 
