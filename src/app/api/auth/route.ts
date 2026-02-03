@@ -1,18 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import crypto from "crypto";
+import { createAuthCookieValue, timingSafeEqual } from "@/lib/auth";
 
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD;
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7; // 7 days
 const COOKIE_NAME = "va_auth";
-
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    // Still do comparison to prevent timing attacks on length
-    crypto.timingSafeEqual(Buffer.from(a), Buffer.from(a));
-    return false;
-  }
-  return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
-}
 
 export async function POST(request: NextRequest) {
   if (!AUTH_PASSWORD) {
@@ -33,8 +24,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid password" }, { status: 401 });
     }
 
-    // Generate session token
-    const sessionToken = crypto.randomUUID();
+    const sessionToken = await createAuthCookieValue(AUTH_PASSWORD, SESSION_MAX_AGE);
     const isDev = process.env.NODE_ENV !== "production";
     // Only set domain for production on the main domain, not preview deployments
     const isVercelPreview = process.env.VERCEL_ENV === "preview";

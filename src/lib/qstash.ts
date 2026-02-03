@@ -9,7 +9,13 @@ export async function enqueueDelivery(canonicalEventId: string) {
     return;
   }
 
-  const url = `${process.env.PUBLIC_BASE_URL}/api/qstash/deliver`;
+  const baseUrl = process.env.PUBLIC_BASE_URL?.trim();
+  if (!baseUrl) {
+    console.error("Missing PUBLIC_BASE_URL; cannot enqueue QStash delivery.");
+    return;
+  }
+
+  const url = `${baseUrl}/api/qstash/deliver`;
   await qstash.publishJSON({
     url,
     body: { canonicalEventId },

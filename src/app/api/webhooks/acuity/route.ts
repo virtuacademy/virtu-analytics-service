@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { sha256Base64, sha256Hex } from "@/lib/crypto";
+import { timingSafeEqual } from "@/lib/auth";
 import { fetchAppointmentById, appointmentSnapshot, extractIntakeValue } from "@/lib/acuity";
 import { enqueueDelivery } from "@/lib/qstash";
 
@@ -57,7 +58,7 @@ export async function POST(req: NextRequest) {
   const contentType = req.headers.get("content-type") ?? "application/x-www-form-urlencoded";
 
   const expected = sha256Base64(raw, secret as string);
-  if (!sig || sig !== expected) {
+  if (!sig || !timingSafeEqual(sig, expected)) {
     return NextResponse.json({ ok: false, error: "Invalid signature" }, { status: 401 });
   }
 
