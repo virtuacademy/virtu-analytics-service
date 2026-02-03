@@ -1,36 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sendTikTokEvent } from "@/lib/outbound/tiktok";
+import { timingSafeEqual } from "@/lib/auth";
 
 export const runtime = "nodejs";
-
-/**
- * TikTok Events API Test Endpoint
- *
- * This endpoint allows manual testing of the TikTok Events API integration.
- * It mirrors the structure of /api/test/google-ads for consistency.
- *
- * Authentication (optional):
- *   If TIKTOK_TEST_SECRET is set, provide it via:
- *   - Header: Authorization: Bearer <secret>
- *   - Header: x-tiktok-test-secret: <secret>
- *   - Header: x-test-secret: <secret>
- *   - Query param: ?secret=<secret>
- *
- * Example request:
- *   POST /api/test/tiktok
- *   Authorization: Bearer your-test-secret
- *   Content-Type: application/json
- *
- *   {
- *     "eventId": "test-123",
- *     "eventName": "TRIAL_BOOKED",
- *     "eventTime": "2026-01-10T12:00:00Z",
- *     "ttclid": "your-ttclid-here",
- *     "email": "test@example.com",
- *     "phone": "+14155551234",
- *     "pageUrl": "https://virtu.academy/schedule"
- *   }
- */
 
 function getTestSecret(req: NextRequest): string | null {
   const headerSecret =
@@ -45,8 +17,7 @@ function getTestSecret(req: NextRequest): string | null {
     return headerSecret.trim();
   }
 
-  const url = new URL(req.url);
-  return url.searchParams.get("secret");
+  return null;
 }
 
 function parseDate(value: unknown): Date | null {
@@ -70,11 +41,13 @@ function parseNumber(value: unknown): number | null {
 
 export async function POST(req: NextRequest) {
   const secret = process.env.TIKTOK_TEST_SECRET;
-  if (secret) {
-    const provided = getTestSecret(req);
-    if (!provided || provided !== secret) {
-      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-    }
+  if (!secret) {
+    return NextResponse.json({ ok: false, error: "Missing TIKTOK_TEST_SECRET" }, { status: 500 });
+  }
+
+  const provided = getTestSecret(req);
+  if (!provided || !timingSafeEqual(provided, secret)) {
+    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 
   let body: Record<string, unknown> = {};

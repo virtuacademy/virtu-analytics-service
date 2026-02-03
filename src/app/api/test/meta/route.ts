@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sendMetaCapi } from "@/lib/outbound/meta";
+import { timingSafeEqual } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -14,8 +15,7 @@ function getTestSecret(req: NextRequest): string | null {
     }
     return headerSecret.trim();
   }
-  const url = new URL(req.url);
-  return url.searchParams.get("secret");
+  return null;
 }
 
 function parseDate(value: unknown): Date | null {
@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
   }
 
   const provided = getTestSecret(req);
-  if (!provided || provided !== secret) {
+  if (!provided || !timingSafeEqual(provided, secret)) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 
