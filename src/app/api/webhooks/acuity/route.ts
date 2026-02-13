@@ -111,6 +111,7 @@ export async function POST(req: NextRequest) {
   const fbc = FBC_FIELD_ID ? extractIntakeValue(appt, FBC_FIELD_ID) : null;
 
   const snap = appointmentSnapshot(appt);
+  const isSelfScheduled = !snap.scheduledBy;
 
   await prisma.appointment.upsert({
     where: { id: String(appt.id) },
@@ -195,6 +196,18 @@ export async function POST(req: NextRequest) {
       eventId,
     },
   });
+
+  if (!isSelfScheduled) {
+    return NextResponse.json({
+      ok: true,
+      canonicalEventId: ce.id,
+      eventName,
+      vaAttrib,
+      eventId,
+      skippedOutbound: true,
+      skipReason: "scheduled_by_acuity_user",
+    });
+  }
 
   await prisma.delivery.createMany({
     data: [
