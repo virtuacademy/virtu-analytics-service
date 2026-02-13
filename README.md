@@ -8,7 +8,7 @@ Analytics and conversion tracking service for Virtu. Captures attribution from W
 - Captures UTMs, click IDs, and platform cookies (`_fbp`, `_fbc`, `_ttp`, `hubspotutk`)
 - Processes Acuity "changed" webhooks into canonical events
 - Sends conversions via QStash to Meta, Google Ads, HubSpot, and TikTok (skips platforms when required env/config is missing)
-- Provides a small dashboard and GraphQL debug endpoint
+- Provides a small dashboard and GraphQL debug endpoint (protected when `AUTH_PASSWORD` is set)
 
 ## Quick start
 
@@ -54,14 +54,14 @@ Key env vars (see `.env.example` for the full list):
 - Google Ads: `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_CLIENT_ID`, `GOOGLE_ADS_CLIENT_SECRET`, `GOOGLE_ADS_REFRESH_TOKEN`, `GOOGLE_ADS_CUSTOMER_ID`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID`, `GOOGLE_ADS_CONVERSION_ACTION_ID(S)`, `GOOGLE_ADS_DEFAULT_PHONE_COUNTRY_CODE`, timezone settings, optional `GOOGLE_ADS_VALIDATE_ONLY`/`GOOGLE_ADS_JOB_ID`, consent settings (`GOOGLE_ADS_AD_USER_DATA_CONSENT`, `GOOGLE_ADS_AD_PERSONALIZATION_CONSENT`, currently ignored by code)
 - TikTok: `TIKTOK_PIXEL_ID`, `TIKTOK_ACCESS_TOKEN`, optional `TIKTOK_EVENT_ACTIONS`, `TIKTOK_TEST_EVENT_CODE`, `TIKTOK_DEFAULT_PHONE_COUNTRY_CODE`
 - Optional: `META_CAPI_TEST_SECRET`, `GOOGLE_ADS_TEST_SECRET`, `HUBSPOT_TEST_SECRET`, and `TIKTOK_TEST_SECRET` for test endpoints
-- Optional: `OUTBOUND_MODE=mock` to skip real delivery, `AUTH_PASSWORD` to protect the dashboard
+- Optional: `OUTBOUND_MODE=mock` to skip real delivery, `AUTH_PASSWORD` to protect UI routes and the GraphQL endpoint
 
 ## API endpoints
 
 - `POST /api/attrib/ingest`
 - `POST /api/webhooks/acuity`
 - `POST /api/qstash/deliver`
-- `GET|POST /api/graphql` (debug; unauthenticated, returns PII)
+- `GET|POST /api/graphql` (debug; requires auth when `AUTH_PASSWORD` is set)
 - `POST /api/test/meta` (manual testing)
 - `POST /api/test/google-ads` (manual testing)
 - `POST /api/test/hubspot` (manual testing)

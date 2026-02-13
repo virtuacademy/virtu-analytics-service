@@ -40,6 +40,30 @@ export async function POST(req: NextRequest) {
   const appt = ce.appointmentId
     ? await prisma.appointment.findUnique({ where: { id: ce.appointmentId } })
     : null;
+  const scheduledBy = appt?.scheduledBy?.trim() ?? "";
+
+  if (scheduledBy) {
+    for (const d of ce.deliveries) {
+      if (d.status === "SUCCESS" || d.status === "SKIPPED") continue;
+
+      await prisma.delivery.update({
+        where: { id: d.id },
+        data: {
+          status: "SKIPPED",
+          attempts: { increment: 1 },
+          lastAttemptAt: new Date(),
+          responseBody: `Skipped outbound: appointment scheduled by logged-in Acuity user (${scheduledBy})`,
+        },
+      });
+    }
+
+    return NextResponse.json({
+      ok: true,
+      skippedOutbound: true,
+      skipReason: "scheduled_by_acuity_user",
+      scheduledBy,
+    });
+  }
 
   const attrib = ce.attributionTok
     ? await prisma.attribution.findUnique({ where: { token: ce.attributionTok } })
