@@ -53,6 +53,20 @@ Local credentials configure this computer only. The deployed service at `attrib.
 
 Docker is optional. It was attempted only to run a disposable local PostgreSQL instance for migration testing. A separate hosted test database or another local PostgreSQL installation serves the same purpose. The production app continues to use Vercel and its existing PostgreSQL database; this integration does not require a new production database or Docker service.
 
+## Immediate synthetic backend test
+
+After the diagnostic handler is deployed, run this from the app directory:
+
+```sh
+npm run openai-capi:test-backend
+```
+
+The command uses the existing local `QSTASH_TOKEN` to publish a signed diagnostic job to `https://attrib.virtu.academy/api/qstash/deliver`. It waits up to 60 seconds for that exact message's result. Retries are disabled for the test job. A `DELIVERED` result means the deployed handler verified the QStash signature, passed a read-only database/table/enum probe, and received an accepted OpenAI validation response using the production credentials.
+
+Only a generated UUID is accepted as test input. The server supplies a fixed `example.com` email and forces `validate_only: true`; caller-supplied customer data, booking IDs, and mode overrides are rejected. The test creates no booking, canonical event, or delivery record and never invokes Meta, Google Ads, TikTok, or HubSpot. A sanitized diagnostic result is logged in Vercel with the validation UUID. Raw request/response bodies and credentials are not printed by the CLI.
+
+This verifies **QStash → deployed worker → database read → OpenAI validation**. It does not exercise the website/Acuity booking flow, database writes for a real booking, saved-event monitoring, or attribution to an ad. Validation events do not appear in Ads Manager. Use the next genuine new self-scheduled trial to verify those remaining parts. The original `openai-capi:validate` command remains a direct local API check that bypasses QStash and Vercel.
+
 ## Behavior and limits
 
 - `TRIAL_BOOKED` maps to `appointment_scheduled`, with `data.type=customer_action`. A booked trial does not prove a trial started or a purchase occurred. Reschedules, cancellations, and generic updates are not separate conversion types; no revenue value is sent. [Supported events](https://developers.openai.com/ads/supported-events).

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
-import { sendOpenAIConversion } from "../src/lib/outbound/openai.mjs";
+import { sendOpenAIConversion, validateOpenAIConversion } from "../src/lib/outbound/openai.mjs";
 
 const now = Date.now();
 const secret = "synthetic-capi-key";
@@ -203,4 +203,31 @@ test("network/timeout/redirect failures omit raw exceptions and remain retryable
   assert.equal(r.retryable, true);
   assert.equal(r.status, 503);
   assert.ok(!JSON.stringify(r).includes(secret));
+});
+
+test("synthetic validation always overrides live settings and uses only fixed synthetic identity", async () => {
+  let payload;
+  const result = await validateOpenAIConversion("12345678-1234-4123-8123-123456789abc", {
+    now,
+    env: {
+      ...env,
+      OPENAI_CAPI_VALIDATE_ONLY: "false",
+      OPENAI_CAPI_ENABLED: "false",
+      OPENAI_CAPI_EVENTS: "APPOINTMENT_BOOKED",
+      OUTBOUND_MODE: "mock",
+    },
+    fetchImpl: async (_url, init) => {
+      payload = JSON.parse(init.body);
+      return new Response(null, { status: 200 });
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.validated, true);
+  assert.equal(payload.validate_only, true);
+  assert.equal(payload.events[0].type, "appointment_scheduled");
+  assert.deepEqual(payload.events[0].user, {
+    emails_sha256: [hash("openai-capi-validation@example.com")],
+  });
+  assert.equal(payload.events[0].source_url, "https://virtu.academy/");
+  assert.equal(payload.events[0].timestamp_ms, now);
 });
