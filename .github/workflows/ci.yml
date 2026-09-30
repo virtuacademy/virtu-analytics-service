@@ -30,6 +30,8 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Test ChatGPT conversion delivery (no network)
+        run: npm run test:openai-capi
       - name: Lint
         run: npm run lint
       - name: Format check

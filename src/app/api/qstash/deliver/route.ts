@@ -5,6 +5,7 @@ import { sendMetaCapi } from "@/lib/outbound/meta";
 import { sendHubSpotEvent } from "@/lib/outbound/hubspot";
 import { sendGoogleAdsClickConversion } from "@/lib/outbound/googleAds";
 import { sendTikTokEvent } from "@/lib/outbound/tiktok";
+import { sendOpenAIConversion } from "@/lib/outbound/openai.mjs";
 
 export const runtime = "nodejs";
 
@@ -80,6 +81,7 @@ export async function POST(req: NextRequest) {
   const ip = session?.ipFirst ?? null;
   const userAgent = session?.uaFirst ?? null;
   const mockOutbound = process.env.OUTBOUND_MODE === "mock";
+  let retryOpenAI = false;
 
   for (const d of ce.deliveries) {
     if (d.status === "SUCCESS" || d.status === "SKIPPED") continue;
@@ -104,6 +106,31 @@ export async function POST(req: NextRequest) {
     };
 
     try {
+      if (d.platform === "OPENAI") {
+        const r = await sendOpenAIConversion({
+          eventId,
+          eventName: ce.name,
+          eventTime: ce.eventTime,
+          eventSourceUrl,
+          email,
+          phone,
+          ip,
+          userAgent,
+        });
+        if (r.skipped) {
+          await mark({ status: "SKIPPED", responseBody: r.reason });
+        } else {
+          // A successful validation did not record a conversion.
+          await mark({
+            status: r.ok ? (r.validated ? "SKIPPED" : "SUCCESS") : "FAILED",
+            responseCode: r.status,
+            responseBody: r.body,
+            requestBody: r.requestBody,
+          });
+          if (!r.ok && r.retryable) retryOpenAI = true;
+        }
+      }
+
       if (d.platform === "META") {
         if (mockOutbound) {
           await mark({ status: "SUCCESS", responseBody: "mock_meta" });
@@ -249,10 +276,17 @@ export async function POST(req: NextRequest) {
         }
       }
     } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Unknown error";
+      const message =
+        d.platform === "OPENAI"
+          ? "OpenAI delivery failed"
+          : e instanceof Error
+            ? e.message
+            : "Unknown error";
+      if (d.platform === "OPENAI") retryOpenAI = true;
       await mark({ status: "FAILED", responseBody: message });
     }
   }
 
-  return NextResponse.json({ ok: true });
+  // QStash retries only unsuccessful HTTP responses. Completed platforms are skipped above.
+  return NextResponse.json({ ok: !retryOpenAI }, { status: retryOpenAI ? 503 : 200 });
 }
