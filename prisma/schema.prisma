@@ -20,6 +20,7 @@ enum DeliveryPlatform {
   GOOGLE_ADS
   TIKTOK
   HUBSPOT
+  OPENAI
 }
 
 enum DeliveryStatus {

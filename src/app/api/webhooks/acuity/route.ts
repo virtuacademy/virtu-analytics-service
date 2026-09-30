@@ -185,6 +185,18 @@ export async function POST(req: NextRequest) {
 
   const eventId = String(appt.id);
 
+  // A changed subscription also fires for edits/reschedules. Do not backfill an
+  // already-observed booking into OpenAI when it is edited after activation.
+  // Read before creating this event; concurrent first observations share the same
+  // OpenAI event ID and are deduplicated by the provider.
+  const priorOpenAIBooking =
+    isSelfScheduled && (eventName === "TRIAL_BOOKED" || eventName === "APPOINTMENT_BOOKED")
+      ? await prisma.canonicalEvent.findFirst({
+          where: { appointmentId: eventId, name: eventName },
+          select: { id: true },
+        })
+      : null;
+
   const ce = await prisma.canonicalEvent.create({
     data: {
       name: eventName,
@@ -215,6 +227,14 @@ export async function POST(req: NextRequest) {
       { canonicalEventId: ce.id, platform: "HUBSPOT" },
       { canonicalEventId: ce.id, platform: "GOOGLE_ADS" },
       { canonicalEventId: ce.id, platform: "TIKTOK" },
+      {
+        canonicalEventId: ce.id,
+        platform: "OPENAI",
+        status: priorOpenAIBooking ? "SKIPPED" : "PENDING",
+        responseBody: priorOpenAIBooking
+          ? "OpenAI booking already observed; no backfill on edit"
+          : null,
+      },
     ],
     skipDuplicates: true,
   });

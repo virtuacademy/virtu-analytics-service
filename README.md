@@ -7,7 +7,7 @@ Analytics and conversion tracking service for Virtu. Captures attribution from W
 - Issues first-party visitor/session IDs and attribution tokens
 - Captures UTMs, click IDs, and platform cookies (`_fbp`, `_fbc`, `_ttp`, `hubspotutk`)
 - Processes Acuity "changed" webhooks into canonical events
-- Sends conversions via QStash to Meta, Google Ads, HubSpot, and TikTok (skips platforms when required env/config is missing)
+- Sends conversions via QStash to Meta, Google Ads, HubSpot, TikTok, and ChatGPT Ads (OpenAI; disabled until configured)
 - Provides a small dashboard and GraphQL debug endpoint (protected when `AUTH_PASSWORD` is set)
 
 ## Quick start
@@ -43,6 +43,14 @@ Open `http://localhost:3000` (if `AUTH_PASSWORD` is set, log in at `/login`).
 
 ## Configuration
 
+### ChatGPT Ads conversions
+
+Follow [ChatGPT conversion setup](OPENAI_CAPI_SETUP.md). Obtain a **Conversions API key and Pixel ID** from Ads Manager's conversions tab, save `OPENAI_CAPI_API_KEY` and `OPENAI_CAPI_PIXEL_ID` in an ignored env file, then run `npm run openai-capi:validate`. The validation command uses synthetic data and cannot record conversions. The Advertiser API key is a different credential and is not used here.
+
+`OPENAI_CAPI_ENABLED` defaults to disabled; `OPENAI_CAPI_VALIDATE_ONLY` defaults to validation. For real delivery, explicitly enable and set validation-only to false after setup. `OPENAI_CAPI_EVENTS` defaults to `TRIAL_BOOKED`; eligible bookings become `appointment_scheduled`. The `OPENAI` delivery platform reuses the existing signed Acuity/QStash flow and staff exclusion. Apply the included Prisma migration before deploying. No campaign or advertising-spend operations are included.
+
+### Existing settings
+
 Key env vars (see `.env.example` for the full list):
 
 - Database: `DATABASE_URL`
@@ -74,6 +82,8 @@ Key env vars (see `.env.example` for the full list):
 
 ## Useful commands
 
+- `npm run openai-capi:validate` (synthetic validation against OpenAI; credentials required)
+- `npm run test:openai-capi` (mocked adapter and pipeline tests; no credentials/network/database)
 - `npm run dev`
 - `npm run build`
 - `npm run lint`

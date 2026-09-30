@@ -2,6 +2,16 @@
 
 ## Overview
 
+### ChatGPT Ads conversion delivery
+
+The `OPENAI` delivery platform sends Acuity bookings through the [OpenAI Conversions API](https://developers.openai.com/ads/conversions-api). Follow [setup and validation](../OPENAI_CAPI_SETUP.md). Server-only credentials are `OPENAI_CAPI_API_KEY` and `OPENAI_CAPI_PIXEL_ID`; the Advertiser API key is not used. `OPENAI_CAPI_ENABLED=true` enables the adapter, and `OPENAI_CAPI_VALIDATE_ONLY=false` enables event recording. Defaults send no live conversions. `OPENAI_CAPI_EVENTS` defaults to `TRIAL_BOOKED`; optionally include `APPOINTMENT_BOOKED`. Both map to `appointment_scheduled` with `customer_action` data and no speculative purchase value.
+
+The webhook adds an OpenAI delivery next to the existing platforms. Previously observed bookings receive `SKIPPED` on later edits, preventing an implicit historical backfill when integration is enabled. New bookings use the appointment ID for stable provider deduplication; the QStash worker retains staff-booking exclusions and skips completed deliveries. Validated-only or mocked requests are `SKIPPED`, not delivered `SUCCESS`. OpenAI HTTP 429/5xx and network failures cause worker HTTP 503 for QStash retry; completed other-platform deliveries stay skipped. Permanent HTTP failures are recorded as `FAILED` and acknowledged to avoid endless retries.
+
+Only hashed email/phone plus existing IP/user agent are sent. National 10-digit phone numbers require explicit `OPENAI_CAPI_DEFAULT_PHONE_COUNTRY_CODE`; ambiguous numbers are omitted. Delivery diagnostics omit credentials, source URLs, identifiers, hashes, and raw upstream responses. No `oppref`/`__obref` browser capture or pixel installation is included; this initial server integration relies on customer-identifier matching. Current event time remains webhook processing time. Acuity `changed` includes edits/reschedules, so first observation can differ from actual booking time. There is no new consent state; confirm the existing measurement permissions cover this destination before real delivery. `opt_out: true` concerns future personalization and is not a substitute for consent.
+
+### Existing attribution flow
+
 This service is the source of truth for attribution and conversions across Webflow + Acuity today and the Opus app later.
 
 High-level flow:
