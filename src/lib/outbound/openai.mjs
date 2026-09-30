@@ -178,3 +178,31 @@ export async function sendOpenAIConversion(args, options = {}) {
     };
   }
 }
+
+/**
+ * Validate a fixed synthetic event using the configured account credentials.
+ * Overrides cannot enable event recording or add customer-provided data.
+ * @param {string} validationId
+ * @param {{ env?: NodeJS.ProcessEnv, fetchImpl?: typeof fetch, now?: number }} [options]
+ */
+export async function validateOpenAIConversion(validationId, options = {}) {
+  return sendOpenAIConversion(
+    {
+      eventId: `validation_${validationId}`,
+      eventName: "TRIAL_BOOKED",
+      eventTime: new Date(options.now ?? Date.now()),
+      eventSourceUrl: "https://virtu.academy",
+      email: "openai-capi-validation@example.com",
+    },
+    {
+      ...options,
+      env: {
+        ...(options.env ?? process.env),
+        OPENAI_CAPI_ENABLED: "true",
+        OPENAI_CAPI_VALIDATE_ONLY: "true",
+        OPENAI_CAPI_EVENTS: "TRIAL_BOOKED",
+        OUTBOUND_MODE: "",
+      },
+    },
+  );
+}

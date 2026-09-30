@@ -10,6 +10,8 @@ The webhook adds an OpenAI delivery next to the existing platforms. Previously o
 
 Only hashed email/phone plus existing IP/user agent are sent. National 10-digit phone numbers require explicit `OPENAI_CAPI_DEFAULT_PHONE_COUNTRY_CODE`; ambiguous numbers are omitted. Delivery diagnostics omit credentials, source URLs, identifiers, hashes, and raw upstream responses. No `oppref`/`__obref` browser capture or pixel installation is included; this initial server integration relies on customer-identifier matching. Current event time remains webhook processing time. Acuity `changed` includes edits/reschedules, so first observation can differ from actual booking time. There is no new consent state; confirm the existing measurement permissions cover this destination before real delivery. `opt_out: true` concerns future personalization and is not a substitute for consent.
 
+A signed QStash diagnostic message `{ "kind": "openai_validation", "validationId": "<UUID v4>" }` runs a read-only `Delivery`/`OPENAI` enum probe and sends a fixed synthetic event using the deployed CAPI credentials. Extra fields and malformed IDs are rejected. The helper always forces validation-only mode, regardless of live configuration; the diagnostic does not read appointments, write database records, or invoke other outbound adapters. It returns 2xx only when both checks pass. Run `npm run openai-capi:test-backend` to publish one job and check its QStash result. This tests backend transport and production credentials, not website/Acuity booking or ad attribution.
+
 ### Existing attribution flow
 
 This service is the source of truth for attribution and conversions across Webflow + Acuity today and the Opus app later.

@@ -82,6 +82,7 @@ Key env vars (see `.env.example` for the full list):
 
 ## Useful commands
 
+- `npm run openai-capi:test-backend` (signed QStash → production worker → database read → synthetic OpenAI validation; no conversion recorded)
 - `npm run openai-capi:validate` (synthetic validation against OpenAI; credentials required)
 - `npm run test:openai-capi` (mocked adapter and pipeline tests; no credentials/network/database)
 - `npm run dev`

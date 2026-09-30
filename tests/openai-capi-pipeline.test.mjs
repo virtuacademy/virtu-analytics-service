@@ -38,6 +38,8 @@ function loadRoute(relativePath, dependencies) {
 function worker(result, options = {}) {
   const updates = [];
   const sent = [];
+  const validations = [];
+  const probes = [];
   const dependencies = {
     "next/server": {
       NextResponse: { json: (body, init) => ({ body, status: init?.status ?? 200 }) },
@@ -45,6 +47,7 @@ function worker(result, options = {}) {
     "@upstash/qstash": {
       Receiver: class {
         async verify() {
+          if (options.signatureThrows) throw new Error("Invalid signature");
           return options.signed !== false;
         }
       },
@@ -70,6 +73,11 @@ function worker(result, options = {}) {
         },
         attribution: { findUnique: async () => ({ lastUrl: "https://virtu.academy" }) },
         delivery: {
+          findFirst: async (query) => {
+            probes.push(query);
+            if (options.databaseFails) throw new Error("private database error");
+            return null;
+          },
           update: async (update) => {
             updates.push(update);
           },
@@ -77,6 +85,10 @@ function worker(result, options = {}) {
       },
     },
     "@/lib/outbound/openai.mjs": {
+      validateOpenAIConversion: async (id) => {
+        validations.push(id);
+        return result;
+      },
       sendOpenAIConversion: async (args) => {
         sent.push(args);
         return result;
@@ -99,9 +111,12 @@ function worker(result, options = {}) {
   return {
     updates,
     sent,
+    probes,
+    validations,
     invoke: () =>
       POST({
-        text: async () => '{"canonicalEventId":"ce1"}',
+        text: async () =>
+          options.raw ?? JSON.stringify(options.message ?? { canonicalEventId: "ce1" }),
         headers: new Headers({ "upstash-signature": "synthetic" }),
       }),
   };
@@ -237,5 +252,86 @@ test("Acuity changed queues first bookings, skips historical edits, and keeps st
         deliveries.find((d) => d.platform === "OPENAI").status,
         prior ? "SKIPPED" : "PENDING",
       );
+  }
+});
+
+const validationMessage = {
+  kind: "openai_validation",
+  validationId: "12345678-1234-4123-8123-123456789abc",
+};
+const validationResult = {
+  skipped: false,
+  ok: true,
+  validated: true,
+  retryable: false,
+  status: 200,
+};
+
+test("signed synthetic job probes the database and validates OpenAI without writing records or invoking normal delivery", async () => {
+  const w = worker(validationResult, { message: validationMessage });
+  const response = await w.invoke();
+  assert.equal(response.status, 200);
+  assert.equal(response.body.validationOnly, true);
+  assert.equal(response.body.openaiHttpStatus, 200);
+  assert.equal(response.body.database, "ok");
+  assert.equal(w.probes.length, 1);
+  assert.equal(w.probes[0].where.platform, "OPENAI");
+  assert.deepEqual(w.validations, [validationMessage.validationId]);
+  assert.equal(w.updates.length, 0);
+  assert.equal(w.sent.length, 0);
+});
+
+test("synthetic jobs require a valid signature before any database or API access", async () => {
+  for (const signing of [{ signed: false }, { signatureThrows: true }]) {
+    const w = worker(validationResult, { message: validationMessage, ...signing });
+    assert.equal((await w.invoke()).status, 401);
+    assert.equal(w.probes.length, 0);
+    assert.equal(w.validations.length, 0);
+    assert.equal(w.sent.length, 0);
+  }
+});
+
+test("synthetic jobs reject customer data, booking IDs, mode overrides, and malformed messages", async () => {
+  for (const message of [
+    { ...validationMessage, validationId: "a-customer@example.com" },
+    { ...validationMessage, canonicalEventId: "ce1" },
+    { ...validationMessage, validate_only: false },
+    { ...validationMessage, email: "a-customer@example.com" },
+    { kind: "unknown", canonicalEventId: "ce1" },
+    null,
+    [],
+    {},
+  ]) {
+    const w = worker(validationResult, { raw: JSON.stringify(message) });
+    assert.equal((await w.invoke()).status, 400);
+    assert.equal(w.probes.length, 0);
+    assert.equal(w.validations.length, 0);
+    assert.equal(w.sent.length, 0);
+  }
+  assert.equal((await worker(validationResult, { raw: "invalid json" }).invoke()).status, 400);
+});
+
+test("database probe failure stops validation and does not expose the database error", async () => {
+  const w = worker(validationResult, { message: validationMessage, databaseFails: true });
+  const response = await w.invoke();
+  assert.equal(response.status, 503);
+  assert.equal(response.body.stage, "database");
+  assert.equal(w.validations.length, 0);
+  assert.equal(JSON.stringify(response).includes("private"), false);
+});
+
+test("synthetic job acknowledges only accepted validation and surfaces configuration/API failures", async () => {
+  for (const [result, status] of [
+    [{ skipped: true, reason: "Missing configuration" }, 422],
+    [{ ...validationResult, ok: false, status: 401 }, 502],
+    [{ ...validationResult, ok: false, retryable: true, status: 429 }, 503],
+    [{ ...validationResult, validated: false }, 502],
+  ]) {
+    const w = worker(result, { message: validationMessage });
+    const response = await w.invoke();
+    assert.equal(response.status, status);
+    assert.equal(response.body.ok, false);
+    assert.equal(w.updates.length, 0);
+    assert.equal(w.sent.length, 0);
   }
 });

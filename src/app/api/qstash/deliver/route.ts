@@ -5,7 +5,7 @@ import { sendMetaCapi } from "@/lib/outbound/meta";
 import { sendHubSpotEvent } from "@/lib/outbound/hubspot";
 import { sendGoogleAdsClickConversion } from "@/lib/outbound/googleAds";
 import { sendTikTokEvent } from "@/lib/outbound/tiktok";
-import { sendOpenAIConversion } from "@/lib/outbound/openai.mjs";
+import { sendOpenAIConversion, validateOpenAIConversion } from "@/lib/outbound/openai.mjs";
 
 export const runtime = "nodejs";
 
@@ -19,7 +19,11 @@ async function verifyQStash(req: NextRequest, body: string) {
   if (!currentSigningKey || !nextSigningKey) return false;
 
   const receiver = new Receiver({ currentSigningKey, nextSigningKey });
-  return receiver.verify({ signature, body });
+  try {
+    return await receiver.verify({ signature, body });
+  } catch {
+    return false;
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -29,7 +33,80 @@ export async function POST(req: NextRequest) {
   if (!okSig)
     return NextResponse.json({ ok: false, error: "Invalid QStash signature" }, { status: 401 });
 
-  const { canonicalEventId } = JSON.parse(raw) as { canonicalEventId: string };
+  let message: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
+    message = parsed as Record<string, unknown>;
+  } catch {
+    return NextResponse.json({ ok: false, error: "Invalid delivery message" }, { status: 400 });
+  }
+
+  // A signed diagnostic message never reads a booking, writes delivery rows, or
+  // invokes other providers. The helper always forces a synthetic validation-only event.
+  if (message.kind === "openai_validation") {
+    const validationId = message.validationId;
+    if (
+      typeof validationId !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        validationId,
+      ) ||
+      Object.keys(message).some((key) => !["kind", "validationId"].includes(key))
+    ) {
+      return NextResponse.json({ ok: false, error: "Invalid validation message" }, { status: 400 });
+    }
+    try {
+      // Read-only probe verifies the production connection, table, and OPENAI enum.
+      await prisma.delivery.findFirst({
+        where: { id: `openai_validation_${validationId}`, platform: "OPENAI" },
+        select: { id: true },
+      });
+    } catch {
+      return NextResponse.json(
+        { ok: false, validationOnly: true, validationId, stage: "database" },
+        { status: 503 },
+      );
+    }
+    try {
+      const result = await validateOpenAIConversion(validationId);
+      if (result.skipped) {
+        return NextResponse.json(
+          {
+            ok: false,
+            validationOnly: true,
+            validationId,
+            stage: "configuration",
+            error: result.reason,
+          },
+          { status: 422 },
+        );
+      }
+      const ok = result.ok && result.validated;
+      const summary = {
+        ok,
+        validationOnly: true,
+        validationId,
+        database: "ok",
+        openaiHttpStatus: result.status,
+      };
+      console.info("OpenAI backend validation", JSON.stringify(summary));
+      return NextResponse.json(summary, { status: ok ? 200 : result.retryable ? 503 : 502 });
+    } catch {
+      return NextResponse.json(
+        { ok: false, validationOnly: true, validationId, stage: "openai" },
+        { status: 503 },
+      );
+    }
+  }
+
+  const canonicalEventId = message.canonicalEventId;
+  if (
+    typeof canonicalEventId !== "string" ||
+    !canonicalEventId.trim() ||
+    message.kind !== undefined
+  ) {
+    return NextResponse.json({ ok: false, error: "Invalid delivery message" }, { status: 400 });
+  }
 
   const ce = await prisma.canonicalEvent.findUnique({
     where: { id: canonicalEventId },
