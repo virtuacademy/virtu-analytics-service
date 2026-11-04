@@ -220,11 +220,12 @@ The existing QStash worker sends the deliveries.
   Trial Lesson Scheduled" (created 2026-11-04 as a secondary action with the Acuity action's
   settings). Opus events never fall back to the Acuity action; without the mapping the delivery
   is `SKIPPED`.
-- **Consent:** like Acuity uploads, Opus uploads mark `adUserData` and `adPersonalization` as
-  granted, and nothing checks the visitor's cookie choice on the marketing site. Gating Opus
-  reports on Termly advertising consent is planned for v2: the marketing site's link helpers
-  would carry click IDs plus a consent marker only after consent, checked in the browser when
-  the link is clicked.
+- **Consent (v1):** like Acuity uploads, Opus uploads mark `adUserData` and `adPersonalization`
+  as granted. As on virtu.academy, the marketing site's page-view capture (`/api/attrib/ingest`)
+  and Opus's own click capture run whatever the visitor chose in Termly. The HubSpot tracking
+  script loads only after Termly consent, so `hubspotutk` (and the `utk` sent to HubSpot) exists
+  only for visitors who accepted. Gating the capture and the Google upload on Termly advertising
+  consent is planned for v2, on both sites at once.
 - **HubSpot:** sends the same `HUBSPOT_EVENT_NAMES` event as Acuity, with
   `source_system = "opus"`, and the snapshot's `hubspotutk` as `utk` when the booking was linked
   to an ingest row. Acuity events keep `HUBSPOT_SOURCE_SYSTEM`.
