@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { randomId } from "@/lib/crypto";
 import { withCors } from "@/lib/cors";
 import { setCookie, setReadableCookie, COOKIE_DOMAIN } from "@/lib/cookies";
+import { ingestIdOrNull } from "@/lib/attribToken";
 
 export const runtime = "nodejs";
 
@@ -12,6 +13,12 @@ type IngestBody = {
   utm?: Record<string, string | null | undefined>;
   click?: Record<string, string | null | undefined>;
   hubspotutk?: string | null;
+  // Sites other than virtu.academy (e.g. www.fortelessons.com) never get this service's
+  // cookies back, so they keep the IDs from the response in their own first-party cookies
+  // and send them here. Each is used only when its cookie is missing, and only if UUID-shaped.
+  vid?: unknown;
+  sid?: unknown;
+  attribTok?: unknown;
 };
 
 function getIp(req: NextRequest): string | null {
@@ -30,9 +37,6 @@ function normalizeValue(value?: string | null) {
 }
 
 const SESSION_WINDOW_MS = 30 * 60 * 1000;
-// Tokens are always randomId() (a UUID). Anything else in the cookie is not ours, and
-// could collide with server-side tokens such as Opus bookings' `opus_<lessonId>`.
-const ATTRIB_TOKEN_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const META_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 90;
 
 function buildFbp(createdAtMs: number): string {
@@ -62,15 +66,16 @@ export async function POST(req: NextRequest) {
     return withCors(res, origin);
   }
 
-  const existingVid = req.cookies.get("va_vid")?.value ?? null;
-  const existingSid = req.cookies.get("va_sid")?.value ?? null;
-  const existingAttrib = req.cookies.get("va_attrib")?.value ?? null;
+  const existingVid = req.cookies.get("va_vid")?.value ?? ingestIdOrNull(body?.vid);
+  const existingSid = req.cookies.get("va_sid")?.value ?? ingestIdOrNull(body?.sid);
+  // A malformed va_attrib cookie counts as missing (see ingestIdOrNull).
+  const existingAttrib =
+    ingestIdOrNull(req.cookies.get("va_attrib")?.value) ?? ingestIdOrNull(body?.attribTok);
 
   const t = now();
   const vid = existingVid ?? randomId();
   let sid = existingSid ?? null;
-  const attribTok =
-    existingAttrib && ATTRIB_TOKEN_PATTERN.test(existingAttrib) ? existingAttrib : randomId();
+  const attribTok = existingAttrib ?? randomId();
 
   if (sid) {
     const existingSession = await prisma.session.findUnique({ where: { id: sid } });

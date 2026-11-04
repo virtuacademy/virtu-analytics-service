@@ -22,6 +22,7 @@ const libs = {
     { crypto: webcrypto, Buffer, btoa, atob },
   ),
   "@/lib/bookingSource": loadTsModule(new URL("../src/lib/bookingSource.ts", import.meta.url), {}),
+  "@/lib/attribToken": loadTsModule(new URL("../src/lib/attribToken.ts", import.meta.url), {}),
 };
 
 function payload(overrides = {}) {
@@ -82,6 +83,7 @@ function sign(raw, timestamp = Math.floor(Date.now() / 1000), secret = SECRET) {
 
 function webhook(options = {}) {
   const committed = [];
+  const ingestLookups = [];
   const queued = [];
   const env = {
     OPUS_WEBHOOK_SECRET: SECRET,
@@ -108,6 +110,13 @@ function webhook(options = {}) {
       return result;
     },
     canonicalEvent: { findFirst: async () => options.existing ?? null },
+    // The visitor's ingest rows, read before the transaction.
+    attribution: {
+      findUnique: async ({ where }) => {
+        ingestLookups.push(where.token);
+        return options.ingestRows?.[where.token] ?? null;
+      },
+    },
   };
   const { POST } = loadTsModule(
     new URL("../src/app/api/webhooks/opus/route.ts", import.meta.url),
@@ -127,7 +136,7 @@ function webhook(options = {}) {
     return POST({ text: async () => raw, headers: new Headers(headers ?? sign(raw)) });
   };
   const rows = (table) => committed.filter((w) => w.table === table).map((w) => w.data);
-  return { send, committed, queued, rows };
+  return { send, committed, queued, rows, ingestLookups };
 }
 
 test("a signed trial booking is recorded once and queued for Google Ads and HubSpot", async () => {
@@ -308,4 +317,112 @@ test("other database failures answer 500 without leaking details", async () => {
   assert.equal(response.status, 500);
   assert.equal(JSON.stringify(response.body).includes("private"), false);
   assert.equal(w.committed.length, 0);
+});
+
+const INGEST_TOKEN = "0b6c5a1e-3f4d-4c2b-9a8e-7d6f5e4c3b2a";
+const ingestRow = {
+  token: INGEST_TOKEN,
+  firstTouchAt: new Date("2026-11-01T09:00:00.000Z"),
+  lastTouchAt: new Date("2026-11-04T18:00:00.000Z"),
+  firstUrl: "https://www.fortelessons.com/trial?gclid=G-ingest",
+  lastUrl: "https://www.fortelessons.com/teachers",
+  firstReferrer: "https://www.google.com/",
+  lastReferrer: "https://www.fortelessons.com/trial",
+  ipAddress: "198.51.100.1",
+  userAgent: "Landing-Agent",
+  utmSource: "google",
+  utmMedium: "cpc",
+  utmCampaign: null,
+  utmTerm: null,
+  utmContent: null,
+  gclid: "G-ingest",
+  gbraid: null,
+  wbraid: null,
+  dclid: null,
+  fbclid: null,
+  fbp: "fb.1.1730000000000.123",
+  fbc: null,
+  ttclid: null,
+  ttp: "ttp-1",
+  msclkid: null,
+  hubspotutk: "utk-1",
+  visitorId: "vid-1",
+  sessionId: "sid-1",
+};
+
+test("a known vaAttrib freezes the ingest row, with the event filling only its gaps", async () => {
+  const w = webhook({ ingestRows: { [INGEST_TOKEN]: ingestRow } });
+  const body = payload({
+    attribution: {
+      vaAttrib: INGEST_TOKEN,
+      utm: {
+        source: "newsletter",
+        medium: "email",
+        campaign: "app-campaign",
+        term: null,
+        content: null,
+      },
+      click: {
+        gclid: "G-app",
+        gbraid: null,
+        wbraid: "W-app",
+        fbclid: null,
+        ttclid: null,
+        msclkid: null,
+      },
+    },
+  });
+  assert.equal((await w.send(body)).status, 200);
+  assert.deepEqual(w.ingestLookups, [INGEST_TOKEN]);
+
+  const [snapshot] = w.rows("attribution");
+  assert.equal(snapshot.token, "opus_lesson-1");
+  // The ingest row wins where it has a value...
+  assert.equal(snapshot.utmSource, "google");
+  assert.equal(snapshot.utmMedium, "cpc");
+  assert.equal(snapshot.gclid, "G-ingest");
+  assert.equal(snapshot.firstUrl, ingestRow.firstUrl);
+  assert.equal(snapshot.lastReferrer, ingestRow.lastReferrer);
+  assert.equal(snapshot.firstTouchAt, ingestRow.firstTouchAt);
+  assert.equal(snapshot.fbp, ingestRow.fbp);
+  assert.equal(snapshot.ttp, "ttp-1");
+  assert.equal(snapshot.hubspotutk, "utk-1");
+  assert.equal(snapshot.visitorId, "vid-1");
+  assert.equal(snapshot.sessionId, "sid-1");
+  // ...the event fills what it lacks...
+  assert.equal(snapshot.utmCampaign, "app-campaign");
+  assert.equal(snapshot.wbraid, "W-app");
+  // ...and IP and user agent come from the booking request.
+  assert.equal(snapshot.ipAddress, "203.0.113.7");
+  assert.equal(snapshot.userAgent, "Synthetic-Agent");
+
+  const [appointment] = w.rows("appointment");
+  assert.equal(appointment.vaAttrib, INGEST_TOKEN);
+  assert.equal(appointment.gclid, "G-ingest");
+  assert.equal(w.rows("canonicalEvent")[0].attributionTok, "opus_lesson-1");
+});
+
+test("a missing, malformed or unknown vaAttrib behaves exactly as without one", async () => {
+  const baseline = webhook();
+  await baseline.send(payload());
+  const unknown = "11111111-2222-4333-8444-555555555555";
+  for (const [vaAttrib, lookups] of [
+    [undefined, []],
+    [null, []],
+    ["opus_lesson-2", []],
+    ["not-a-uuid", []],
+    [42, []],
+    [unknown, [unknown]],
+  ]) {
+    const w = webhook({ ingestRows: { [INGEST_TOKEN]: ingestRow } });
+    const response = await w.send(payload({ attribution: { vaAttrib } }));
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    assert.deepEqual(w.ingestLookups, lookups);
+    // Rows come from separate module sandboxes, so compare them as plain JSON.
+    assert.equal(
+      JSON.stringify(w.rows("attribution")),
+      JSON.stringify(baseline.rows("attribution")),
+    );
+    assert.equal(w.rows("appointment")[0].vaAttrib, "opus_lesson-1");
+  }
 });

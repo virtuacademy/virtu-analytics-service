@@ -5,6 +5,8 @@ import { hmacSha256Hex, sha256Hex } from "@/lib/crypto";
 import { timingSafeEqual } from "@/lib/auth";
 import { enqueueDelivery } from "@/lib/qstash";
 import { OPUS_DELIVERY_PLATFORMS, enabledOpusDeliveryPlatforms } from "@/lib/bookingSource";
+import { ingestIdOrNull } from "@/lib/attribToken";
+import type { Attribution } from "@prisma/client";
 
 // Opus (app.fortelessons.com) reports each booked trial lesson here.
 // Contract: docs/opus-trial-webhook.md.
@@ -59,6 +61,9 @@ const payloadSchema = z
       userAgent: longText(),
     }),
     attribution: z.object({
+      // The visitor's ingest token (va_attrib on .fortelessons.com). Anything that is not a
+      // UUID is ignored rather than rejected, so a bad cookie never costs the booking.
+      vaAttrib: z.unknown().optional(),
       landingUrl: longText(),
       referrer: longText(),
       firstTouchAt: isoDateTime.nullish().transform((value) => value ?? null),
@@ -123,10 +128,59 @@ function plannedDeliveries(payload: TrialBookedPayload) {
   );
 }
 
+// The Opus Attribution row: the visitor's ingest row frozen at booking time, so later page
+// views cannot change a past conversion. The event's own capture fills only the fields the
+// ingest row lacks (for example a gclid seen only when the visitor landed directly in the
+// app). IP and user agent always come from the booking request.
+function attributionSnapshot(
+  payload: TrialBookedPayload,
+  ingest: Attribution | null,
+  occurredAt: Date,
+) {
+  const { attribution: event, client } = payload;
+  return {
+    token: payload.eventId,
+    firstTouchAt:
+      ingest?.firstTouchAt ?? (event.firstTouchAt ? new Date(event.firstTouchAt) : occurredAt),
+    lastTouchAt:
+      ingest?.lastTouchAt ?? (event.lastTouchAt ? new Date(event.lastTouchAt) : occurredAt),
+    firstUrl: ingest?.firstUrl ?? event.landingUrl,
+    lastUrl: ingest?.lastUrl ?? event.landingUrl,
+    firstReferrer: ingest?.firstReferrer ?? event.referrer,
+    lastReferrer: ingest?.lastReferrer ?? event.referrer,
+    ipAddress: client.ip,
+    userAgent: client.userAgent,
+    utmSource: ingest?.utmSource ?? event.utm.source,
+    utmMedium: ingest?.utmMedium ?? event.utm.medium,
+    utmCampaign: ingest?.utmCampaign ?? event.utm.campaign,
+    utmTerm: ingest?.utmTerm ?? event.utm.term,
+    utmContent: ingest?.utmContent ?? event.utm.content,
+    gclid: ingest?.gclid ?? event.click.gclid,
+    gbraid: ingest?.gbraid ?? event.click.gbraid,
+    wbraid: ingest?.wbraid ?? event.click.wbraid,
+    dclid: ingest?.dclid ?? null,
+    fbclid: ingest?.fbclid ?? event.click.fbclid,
+    fbp: ingest?.fbp ?? null,
+    fbc: ingest?.fbc ?? null,
+    ttclid: ingest?.ttclid ?? event.click.ttclid,
+    ttp: ingest?.ttp ?? null,
+    msclkid: ingest?.msclkid ?? event.click.msclkid,
+    hubspotutk: ingest?.hubspotutk ?? null,
+    visitorId: ingest?.visitorId ?? null,
+    sessionId: ingest?.sessionId ?? null,
+  };
+}
+
 async function record(raw: string, payload: TrialBookedPayload) {
-  const { eventId, booking, contact, client, attribution, flags } = payload;
+  const { eventId, booking, contact, attribution, flags } = payload;
   const occurredAt = new Date(payload.occurredAt);
   const deliveries = plannedDeliveries(payload);
+  // A missing, malformed or unknown token leaves the event's own capture as the only source.
+  const ingestToken = ingestIdOrNull(attribution.vaAttrib);
+  const ingest = ingestToken
+    ? await prisma.attribution.findUnique({ where: { token: ingestToken } })
+    : null;
+  const snapshot = attributionSnapshot(payload, ingest, occurredAt);
 
   return prisma.$transaction(async (tx) => {
     await tx.inboundWebhook.create({
@@ -151,38 +205,16 @@ async function record(raw: string, payload: TrialBookedPayload) {
         firstName: contact.firstName,
         lastName: contact.lastName,
         scheduledBy: flags.staffInitiated ? STAFF_SCHEDULED_BY : null,
-        // Links the Attribution row below, as an Acuity va_attrib token does.
-        vaAttrib: eventId,
-        gclid: attribution.click.gclid,
-        ttclid: attribution.click.ttclid,
+        // The visitor's ingest token links its visit history, as on an Acuity appointment.
+        // Without one, it links the booking's own Attribution row below.
+        vaAttrib: ingest?.token ?? eventId,
+        gclid: snapshot.gclid,
+        ttclid: snapshot.ttclid,
         rawJson: raw,
       },
     });
 
-    await tx.attribution.create({
-      data: {
-        token: eventId,
-        firstTouchAt: attribution.firstTouchAt ? new Date(attribution.firstTouchAt) : occurredAt,
-        lastTouchAt: attribution.lastTouchAt ? new Date(attribution.lastTouchAt) : occurredAt,
-        firstUrl: attribution.landingUrl,
-        lastUrl: attribution.landingUrl,
-        firstReferrer: attribution.referrer,
-        lastReferrer: attribution.referrer,
-        ipAddress: client.ip,
-        userAgent: client.userAgent,
-        utmSource: attribution.utm.source,
-        utmMedium: attribution.utm.medium,
-        utmCampaign: attribution.utm.campaign,
-        utmTerm: attribution.utm.term,
-        utmContent: attribution.utm.content,
-        gclid: attribution.click.gclid,
-        gbraid: attribution.click.gbraid,
-        wbraid: attribution.click.wbraid,
-        fbclid: attribution.click.fbclid,
-        ttclid: attribution.click.ttclid,
-        msclkid: attribution.click.msclkid,
-      },
-    });
+    await tx.attribution.create({ data: snapshot });
 
     const canonicalEvent = await tx.canonicalEvent.create({
       data: {

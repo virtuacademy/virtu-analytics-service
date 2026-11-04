@@ -131,6 +131,7 @@ function worker(options = {}) {
         userAgent: "Synthetic-Agent",
         lastUrl: "https://app.fortelessons.com/teacher/profile/abc",
         gclid: "G-1",
+        hubspotutk: options.hubspotutk ?? null,
       }),
     },
     session: {
@@ -264,4 +265,15 @@ test("staff-booked Opus trials are skipped without contacting any platform", asy
   assert.equal(w.googleCalls.length + w.hubspotCalls.length, 0);
   assert.equal(w.statusOf("google").status, "SKIPPED");
   assert.match(w.statusOf("hubspot").responseBody, /booked by Forte staff in Opus/);
+});
+
+test("HubSpot gets the visitor's utk when the Opus booking was linked to an ingest row", async () => {
+  const linked = worker({ hubspotutk: "utk-1" });
+  await linked.invoke();
+  assert.equal(linked.hubspotCalls[0].utk, "utk-1");
+  assert.equal(linked.hubspotCalls[0].sourceSystem, "opus");
+
+  const unlinked = worker();
+  await unlinked.invoke();
+  assert.equal(unlinked.hubspotCalls[0].utk, null);
 });

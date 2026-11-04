@@ -55,7 +55,7 @@ Follow [ChatGPT conversion setup](OPENAI_CAPI_SETUP.md). Obtain a **Conversions 
 Key env vars (see `.env.example` for the full list):
 
 - Database: `DATABASE_URL`
-- URLs/CORS/Cookies: `PUBLIC_BASE_URL`, `ALLOWED_ORIGINS`, `COOKIE_DOMAIN`
+- URLs/CORS/Cookies: `PUBLIC_BASE_URL`, `ALLOWED_ORIGINS` (virtu.academy plus `https://www.fortelessons.com` and `https://fortelessons.com` for the Forte marketing site), `COOKIE_DOMAIN`
 - Acuity: `ACUITY_USER_ID`, `ACUITY_API_KEY`, intake field IDs, appointment type IDs
 - QStash: `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`
 - Meta: `META_PIXEL_ID`, `META_CAPI_ACCESS_TOKEN`, `META_CAPI_EVENT_NAME(S)`, optional `META_CAPI_TEST_EVENT_CODE`, `META_CAPI_API_VERSION`, `META_CAPI_LDU_ENABLED`, `META_CAPI_PREDICTED_LTV`
@@ -68,7 +68,7 @@ Key env vars (see `.env.example` for the full list):
 
 ## API endpoints
 
-- `POST /api/attrib/ingest`
+- `POST /api/attrib/ingest` (body: `url`, `referrer`, `utm`, `click`, `hubspotutk`, and optional `vid`/`sid`/`attribTok` for sites that cannot receive this service's cookies; see [the ingest contract](docs/opus-trial-webhook.md#ingest-contract-for-the-marketing-site))
 - `POST /api/webhooks/acuity`
 - `POST /api/webhooks/opus` (signed by Opus; see [docs/opus-trial-webhook.md](docs/opus-trial-webhook.md))
 - `POST /api/qstash/deliver`

@@ -29,7 +29,7 @@ High-level flow:
 
 ### Opus trial bookings
 
-Opus (app.fortelessons.com) books trial lessons without Acuity and cannot read `.virtu.academy` cookies, so it posts each booking, with the click IDs and UTMs it captured, to the signed `POST /api/webhooks/opus`. The service records it under `opus_<lessonId>` (Appointment, Attribution, `TRIAL_BOOKED` canonical event) and delivers it to Google Ads and HubSpot only: Google Ads uses a separate `opus:TRIAL_BOOKED` conversion action and HubSpot gets `source_system = "opus"`. `OPUS_DELIVERY_PLATFORMS` switches each platform on; until then deliveries are recorded as `SKIPPED` and are never delivered later, so turn platforms on before the bookings you want delivered. The worker also skips any Opus delivery to a platform that is not enabled when it runs. Full contract: [opus-trial-webhook.md](opus-trial-webhook.md).
+Opus (app.fortelessons.com) books trial lessons without Acuity and cannot read `.virtu.academy` cookies. The Forte marketing site (www.fortelessons.com) calls `/api/attrib/ingest` on every page view and keeps the returned IDs in its own `.fortelessons.com` cookies (`va_attrib`, `va_vid`, `va_sid`), sending them back in the ingest body. Opus posts each booking, with that `va_attrib` token and the click IDs and UTMs it captured itself, to the signed `POST /api/webhooks/opus`, which snapshots the visitor's ingest row and uses Opus's capture only for missing fields. The service records it under `opus_<lessonId>` (Appointment, Attribution, `TRIAL_BOOKED` canonical event) and delivers it to Google Ads and HubSpot only: Google Ads uses a separate `opus:TRIAL_BOOKED` conversion action and HubSpot gets `source_system = "opus"`. `OPUS_DELIVERY_PLATFORMS` switches each platform on; until then deliveries are recorded as `SKIPPED` and are never delivered later, so turn platforms on before the bookings you want delivered. The worker also skips any Opus delivery to a platform that is not enabled when it runs. Full contract: [opus-trial-webhook.md](opus-trial-webhook.md).
 
 ## Current behavior (v1)
 
@@ -67,7 +67,7 @@ Why this matters:
 ## Endpoints
 
 Public (CORS-protected):
-- `POST /api/attrib/ingest` (also supports `OPTIONS` preflight)
+- `POST /api/attrib/ingest` (also supports `OPTIONS` preflight). Optional body fields `vid`, `sid` and `attribTok` let a site that never receives this service's cookies (www.fortelessons.com) send back the IDs from an earlier response; each is used only when its cookie is missing and only if UUID-shaped, otherwise a fresh ID is issued. A `va_attrib` cookie that is not a UUID is also replaced. See [the ingest contract](opus-trial-webhook.md#ingest-contract-for-the-marketing-site).
 
 Internal (signed):
 - `POST /api/webhooks/acuity` - verifies signature, fetches appointment, creates canonical events, queues deliveries.
@@ -95,7 +95,7 @@ Dashboard:
 See `.env.example` for the full list. Key values:
 - `DATABASE_URL` - Postgres connection string
 - `PUBLIC_BASE_URL` - e.g. `https://analytics.virtu.academy`
-- `ALLOWED_ORIGINS` - comma-separated Webflow origins (CORS)
+- `ALLOWED_ORIGINS` - comma-separated origins allowed to call ingest (CORS): the Webflow origins plus `https://www.fortelessons.com` and `https://fortelessons.com`
 - `COOKIE_DOMAIN` - `.virtu.academy` (prod only; dev uses host-only cookies)
 - Acuity: `ACUITY_USER_ID`, `ACUITY_API_KEY`, intake field IDs, `ACUITY_TRIAL_APPOINTMENT_TYPE_IDS` (comma-separated), `ACUITY_TRIAL_APPOINTMENT_TYPE_ID` (legacy fallback), `ACUITY_WEBHOOK_FORWARD_URL` (optional legacy forward)
 - QStash: `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`
