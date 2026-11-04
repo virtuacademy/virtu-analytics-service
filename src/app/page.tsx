@@ -16,6 +16,7 @@ const TRIAL_APPOINTMENT_TYPES = (process.env.ACUITY_TRIAL_APPOINTMENT_TYPE_IDS ?
 type SearchParams = {
   trial?: string;
   leads?: string;
+  opus?: string;
   appt?: string;
 };
 
@@ -44,6 +45,7 @@ export default async function Home({ searchParams }: { searchParams?: Promise<Se
   const clearParams = new URLSearchParams();
   if (resolvedSearchParams?.trial === "1") clearParams.set("trial", "1");
   if (resolvedSearchParams?.leads === "1") clearParams.set("leads", "1");
+  if (resolvedSearchParams?.opus === "1") clearParams.set("opus", "1");
   const clearHref = clearParams.toString() ? `/?${clearParams.toString()}` : "/";
 
   const attributions = await prisma.attribution.findMany({

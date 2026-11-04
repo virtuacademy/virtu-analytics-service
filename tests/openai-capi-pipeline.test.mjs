@@ -94,6 +94,7 @@ function worker(result, options = {}) {
         return result;
       },
     },
+    "@/lib/bookingSource": loadRoute("../src/lib/bookingSource.ts", {}),
   };
   for (const [path, method] of [
     ["meta", "sendMetaCapi"],

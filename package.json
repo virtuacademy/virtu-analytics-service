@@ -5,6 +5,7 @@
   "scripts": {
     "openai-capi:test-backend": "node scripts/openai-capi-backend-test.mjs",
     "openai-capi:validate": "node scripts/openai-capi-validate.mjs",
+    "test": "node --test tests/*.test.mjs",
     "test:openai-capi": "node --test tests/openai-capi*.test.mjs",
     "postinstall": "prisma generate",
     "dev": "next dev",

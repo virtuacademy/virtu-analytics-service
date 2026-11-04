@@ -6,6 +6,10 @@ export function sha256Base64(input: string, secret: string): string {
   return h.digest("base64");
 }
 
+export function hmacSha256Hex(input: string, secret: string): string {
+  return crypto.createHmac("sha256", secret).update(input).digest("hex");
+}
+
 export function sha256Hex(input: string): string {
   return crypto.createHash("sha256").update(input).digest("hex");
 }

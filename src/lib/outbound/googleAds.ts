@@ -18,11 +18,21 @@ type GoogleAdsClickConversionArgs = {
   lastName?: string | null;
   orderId?: string | null;
   userIpAddress?: string | null;
+  // Booking system ("acuity" when omitted). Other sources need their own action mapping.
+  source?: string | null;
 };
 
 type GoogleAdsSendResult =
   | { skipped: true; reason: string }
-  | { skipped: false; ok: boolean; status: number; body: string; requestBody: string };
+  | {
+      skipped: false;
+      ok: boolean;
+      status: number;
+      body: string;
+      requestBody: string;
+      // GOOGLE_ADS_VALIDATE_ONLY: Google checked the upload but recorded nothing.
+      validateOnly: boolean;
+    };
 
 type ConsentStatus = "GRANTED" | "DENIED";
 
@@ -208,8 +218,21 @@ function parseConversionActionMap(value?: string | null): Record<string, string>
   return map;
 }
 
-function resolveConversionActionId(eventName: string | null | undefined): string | null {
+function isAcuitySource(source: string | null | undefined): boolean {
+  return !source || source === "acuity";
+}
+
+// Acuity events use "EVENT=ID" with a GOOGLE_ADS_CONVERSION_ACTION_ID fallback. Any other
+// booking system needs its own "source:EVENT=ID" entry and never falls back, so its
+// conversions cannot land in the Acuity action.
+function resolveConversionActionId(
+  eventName: string | null | undefined,
+  source: string | null | undefined,
+): string | null {
   const mapping = parseConversionActionMap(process.env.GOOGLE_ADS_CONVERSION_ACTIONS);
+  if (!isAcuitySource(source)) {
+    return eventName ? (mapping[`${source}:${eventName}`] ?? null) : null;
+  }
   if (eventName && mapping[eventName]) return mapping[eventName];
   const fallback = process.env.GOOGLE_ADS_CONVERSION_ACTION_ID;
   return fallback ? fallback.trim() : null;
@@ -338,9 +361,14 @@ export async function sendGoogleAdsClickConversion(
   const authResult = buildAuth();
   if (!authResult.ok) return { skipped: true, reason: authResult.reason };
 
-  const conversionActionId = resolveConversionActionId(args.eventName ?? null);
+  const conversionActionId = resolveConversionActionId(args.eventName ?? null, args.source);
   if (!conversionActionId) {
-    return { skipped: true, reason: "Missing GOOGLE_ADS_CONVERSION_ACTION_ID(S)" };
+    return {
+      skipped: true,
+      reason: isAcuitySource(args.source)
+        ? "Missing GOOGLE_ADS_CONVERSION_ACTION_ID(S)"
+        : `Missing GOOGLE_ADS_CONVERSION_ACTIONS entry for ${args.source}:${args.eventName ?? "event"}`,
+    };
   }
 
   const identifiers = buildUserIdentifiers(args);
@@ -390,7 +418,8 @@ export async function sendGoogleAdsClickConversion(
 
   const jobId = parseJobId(process.env.GOOGLE_ADS_JOB_ID);
   if (jobId) request.jobId = jobId;
-  if (isTruthy(process.env.GOOGLE_ADS_VALIDATE_ONLY)) request.validateOnly = true;
+  const validateOnly = isTruthy(process.env.GOOGLE_ADS_VALIDATE_ONLY);
+  if (validateOnly) request.validateOnly = true;
   const requestBody = JSON.stringify(request);
 
   let accessToken: string;
@@ -398,7 +427,7 @@ export async function sendGoogleAdsClickConversion(
     accessToken = await fetchAccessToken(authResult.auth);
   } catch (error) {
     const message = error instanceof Error ? error.message : "OAuth token request failed";
-    return { skipped: false, ok: false, status: 500, body: message, requestBody };
+    return { skipped: false, ok: false, status: 500, body: message, requestBody, validateOnly };
   }
 
   const url = `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}/customers/${customerId}:uploadClickConversions`;
@@ -433,5 +462,5 @@ export async function sendGoogleAdsClickConversion(
 
   const body = parsed ? JSON.stringify(parsed) : text;
   const ok = res.ok && (!partialFailureError || isClickNotFoundOnly(partialFailureError));
-  return { skipped: false, ok, status: res.status, body, requestBody };
+  return { skipped: false, ok, status: res.status, body, requestBody, validateOnly };
 }
