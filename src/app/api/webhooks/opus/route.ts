@@ -18,6 +18,9 @@ const SIGNATURE_TOLERANCE_SECONDS = 300;
 // has no claim step, so a resend only requeues deliveries left unattempted this long.
 const REQUEUE_AFTER_MS = 10 * 60 * 1000;
 const STAFF_SCHEDULED_BY = "opus:staff";
+// An ingest row touched after the booking (plus this slack for clock skew and the send
+// delay) has seen later visits, for example during a replay, so it is not used.
+const INGEST_TOUCH_SLACK_MS = 10 * 60 * 1000;
 
 const isoDateTime = z.string().datetime({ offset: true });
 // Optional values may be null or omitted; both are stored as null.
@@ -175,11 +178,16 @@ async function record(raw: string, payload: TrialBookedPayload) {
   const { eventId, booking, contact, attribution, flags } = payload;
   const occurredAt = new Date(payload.occurredAt);
   const deliveries = plannedDeliveries(payload);
-  // A missing, malformed or unknown token leaves the event's own capture as the only source.
+  // A missing, malformed or unknown token leaves the event's own capture, which Opus froze at
+  // booking, as the only source. So does an ingest row last touched after the booking.
   const ingestToken = ingestIdOrNull(attribution.vaAttrib);
-  const ingest = ingestToken
+  const ingestRow = ingestToken
     ? await prisma.attribution.findUnique({ where: { token: ingestToken } })
     : null;
+  const ingest =
+    ingestRow && ingestRow.lastTouchAt.getTime() <= occurredAt.getTime() + INGEST_TOUCH_SLACK_MS
+      ? ingestRow
+      : null;
   const snapshot = attributionSnapshot(payload, ingest, occurredAt);
 
   return prisma.$transaction(async (tx) => {

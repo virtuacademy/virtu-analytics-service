@@ -426,3 +426,30 @@ test("a missing, malformed or unknown vaAttrib behaves exactly as without one", 
     assert.equal(w.rows("appointment")[0].vaAttrib, "opus_lesson-1");
   }
 });
+
+test("an ingest row touched more than 10 minutes after the booking is treated as unknown", async () => {
+  // occurredAt is 2026-11-04T18:22:05Z; the cutoff is 18:32:05Z.
+  const baseline = webhook();
+  await baseline.send(payload());
+  for (const [lastTouchAt, linked] of [
+    ["2026-11-04T18:32:05.000Z", true],
+    ["2026-11-04T18:32:05.001Z", false],
+    ["2026-11-20T09:00:00.000Z", false],
+  ]) {
+    const row = { ...ingestRow, lastTouchAt: new Date(lastTouchAt), gclid: "G-later-visit" };
+    const w = webhook({ ingestRows: { [INGEST_TOKEN]: row } });
+    assert.equal((await w.send(payload({ attribution: { vaAttrib: INGEST_TOKEN } }))).status, 200);
+    const [snapshot] = w.rows("attribution");
+    const [appointment] = w.rows("appointment");
+    if (linked) {
+      assert.equal(snapshot.gclid, "G-later-visit");
+      assert.equal(appointment.vaAttrib, INGEST_TOKEN);
+    } else {
+      assert.equal(
+        JSON.stringify(w.rows("attribution")),
+        JSON.stringify(baseline.rows("attribution")),
+      );
+      assert.equal(appointment.vaAttrib, "opus_lesson-1");
+    }
+  }
+});

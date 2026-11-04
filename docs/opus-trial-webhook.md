@@ -26,6 +26,10 @@ when it happens, and only a token travels to the booking.
    conversion. Opus's own capture (below) fills only the fields the ingest row lacks, for
    example a gclid seen only when the visitor landed directly in the app. Without a usable
    token, Opus's capture is the only source.
+5. **Replays cannot drift.** An ingest row whose `lastTouchAt` is later than `occurredAt` plus 10
+   minutes has seen visits after the booking (a resend or replay days later could otherwise pick
+   up a newer gclid), so it is treated as unknown and Opus's capture, frozen at booking, is used
+   alone. The 10 minutes cover clock skew and the delay between booking and sending.
 
 Opus's own capture: the fortelessons.com link helpers carry `gclid`, `gbraid`, `wbraid`,
 `fbclid`, `ttclid`, `msclkid` and `utm_*` on links into the app, and Opus stores them in its
@@ -136,8 +140,9 @@ of a captured request; resends re-sign with a fresh timestamp.
 - `client` is the booker's IP and user agent from the booking request.
 - `attribution.vaAttrib` is the visitor's ingest token, the `va_attrib` cookie on
   `.fortelessons.com`, or `null`/absent. When it names a known ingest row, that row is the
-  primary source (see "What gets recorded"). A value that is not a UUID, or an unknown one, is
-  ignored rather than rejected, so the booking is recorded exactly as without it.
+  primary source (see "What gets recorded"). A value that is not a UUID, an unknown one, or one
+  whose ingest row was touched more than 10 minutes after `occurredAt` is ignored rather than
+  rejected, so the booking is recorded exactly as without it.
 - The rest of `attribution` is Opus's own capture, from the visitor's visits to the app that
   arrived with a click ID or UTM:
   - `utm`: each field keeps its latest non-empty value (same rule as ingest).
@@ -193,7 +198,8 @@ One transaction writes:
   `eventId` (linking the snapshot), and
   `scheduledBy = "opus:staff"` for staff bookings.
 - `Attribution` with `token = eventId`: a snapshot taken at booking time.
-  - With a known `vaAttrib`, each of the UTMs, click IDs (`gclid`, `gbraid`, `wbraid`, `dclid`,
+  - With a known `vaAttrib` whose ingest row was last touched no later than 10 minutes after
+    `occurredAt`, each of the UTMs, click IDs (`gclid`, `gbraid`, `wbraid`, `dclid`,
     `fbclid`, `ttclid`, `msclkid`), `fbp`, `fbc`, `ttp`, `hubspotutk`, first and last URL,
     referrer and touch time, `visitorId` and `sessionId` comes from the ingest row; the event's
     `attribution` fills only the fields the ingest row lacks.
