@@ -14,6 +14,11 @@ export function bookingSourceFor(appointmentId: string | null | undefined): Book
 export const OPUS_DELIVERY_PLATFORMS = ["GOOGLE_ADS", "HUBSPOT"] as const;
 export type OpusDeliveryPlatform = (typeof OPUS_DELIVERY_PLATFORMS)[number];
 
+/** Whether an Opus booking may be delivered to `platform` under `OPUS_DELIVERY_PLATFORMS`. */
+export function isOpusDeliveryEnabled(platform: string, value: string | null | undefined): boolean {
+  return [...enabledOpusDeliveryPlatforms(value)].some((enabled) => enabled === platform);
+}
+
 /** Parse `OPUS_DELIVERY_PLATFORMS` ("GOOGLE_ADS,HUBSPOT"); unknown names are ignored. */
 export function enabledOpusDeliveryPlatforms(
   value: string | null | undefined,

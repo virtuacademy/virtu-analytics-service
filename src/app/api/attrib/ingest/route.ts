@@ -30,6 +30,9 @@ function normalizeValue(value?: string | null) {
 }
 
 const SESSION_WINDOW_MS = 30 * 60 * 1000;
+// Tokens are always randomId() (a UUID). Anything else in the cookie is not ours, and
+// could collide with server-side tokens such as Opus bookings' `opus_<lessonId>`.
+const ATTRIB_TOKEN_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const META_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 90;
 
 function buildFbp(createdAtMs: number): string {
@@ -66,7 +69,8 @@ export async function POST(req: NextRequest) {
   const t = now();
   const vid = existingVid ?? randomId();
   let sid = existingSid ?? null;
-  const attribTok = existingAttrib ?? randomId();
+  const attribTok =
+    existingAttrib && ATTRIB_TOKEN_PATTERN.test(existingAttrib) ? existingAttrib : randomId();
 
   if (sid) {
     const existingSession = await prisma.session.findUnique({ where: { id: sid } });

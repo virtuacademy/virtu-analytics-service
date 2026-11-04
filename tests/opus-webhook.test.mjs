@@ -233,17 +233,20 @@ test("optional values may be null or omitted", async () => {
   assert.equal(w.rows("attribution")[0].msclkid, null);
 });
 
-test("a resend of a recorded booking changes nothing and requeues only never-attempted deliveries", async () => {
+test("a resend is deduplicated and requeues only deliveries left unattempted for 10 minutes", async () => {
   const duplicate = Object.assign(new Error("Unique constraint failed"), { code: "P2002" });
-  for (const [deliveries, requeued] of [
-    [[{ status: "SUCCESS", attempts: 1 }], false],
-    [[{ status: "FAILED", attempts: 1 }], false],
-    [[{ status: "PENDING", attempts: 0 }], true],
+  const minutesAgo = (minutes) => new Date(Date.now() - minutes * 60 * 1000);
+  for (const [createdAt, deliveries, requeued] of [
+    // Fresh: the first request's queue message may still be on its way to the worker.
+    [minutesAgo(1), [{ status: "PENDING", attempts: 0 }], false],
+    [minutesAgo(11), [{ status: "PENDING", attempts: 0 }], true],
+    [minutesAgo(11), [{ status: "SUCCESS", attempts: 1 }], false],
+    [minutesAgo(11), [{ status: "FAILED", attempts: 1 }], false],
   ]) {
     const w = webhook({
       failOn: "appointment",
       error: duplicate,
-      existing: { id: "ce_existing", deliveries },
+      existing: { id: "ce_existing", createdAt, deliveries },
     });
     const response = await w.send(payload());
     assert.equal(response.status, 200);
@@ -252,6 +255,20 @@ test("a resend of a recorded booking changes nothing and requeues only never-att
     assert.equal(w.committed.length, 0);
     assert.deepEqual(w.queued, requeued ? ["ce_existing"] : []);
   }
+});
+
+test("a unique conflict without this booking's event is a 409, not a dedupe", async () => {
+  const w = webhook({
+    failOn: "attribution",
+    error: Object.assign(new Error("Unique constraint failed"), { code: "P2002" }),
+    existing: null,
+  });
+  const response = await w.send(payload());
+  assert.equal(response.status, 409);
+  assert.equal(response.body.ok, false);
+  assert.equal(response.body.error, "Conflicting record for this eventId");
+  assert.equal(w.committed.length, 0);
+  assert.equal(w.queued.length, 0);
 });
 
 test("staff bookings are recorded but never delivered", async () => {

@@ -58,7 +58,7 @@ of a captured request; resends re-sign with a fresh timestamp.
   },
   "client": { "ip": "203.0.113.7", "userAgent": "Mozilla/5.0 …" },
   "attribution": {
-    "landingUrl": "https://app.fortelessons.com/teacher/profile/abc?utm_source=google&gclid=…",
+    "landingUrl": "https://app.fortelessons.com/teacher/profile/abc",
     "referrer": "https://www.fortelessons.com/",
     "firstTouchAt": "2026-11-04T18:01:44.000Z",
     "lastTouchAt": "2026-11-04T18:01:44.000Z",
@@ -73,12 +73,18 @@ of a captured request; resends re-sign with a fresh timestamp.
   numeric appointment IDs, and the value is the Google Ads `order_id` and HubSpot `event_id`.
 - `occurredAt` is when the lesson was booked. It becomes the conversion time.
 - `contact` is the person who made the booking (the signed-in account holder, usually a
-  parent), never the learner. Opus does not send bookings made by account holders under 18.
-- `valueCents` is the learner's total charge in integer cents, or `null`. The Google Ads action
-  always uses its own default value, so this is informational.
+  parent), never the learner. Opus decides which bookings to report
+  (`shouldReportTrialBooking`); attrib records whatever it receives.
+- `valueCents` is Opus's `learnerTotalCostCents`: the trial's price to the learner in integer
+  cents, including the processing fee and before any discount code or account credit (or
+  `null`). It is stored as the canonical event value (`valueCents / 100`) and uploaded as the
+  Google Ads conversion value, but the Opus conversion action is set to use the same value for
+  each conversion ($280, matching the Acuity action), so Google ignores the uploaded value.
 - `client` is the booker's IP and user agent from the booking request.
 - `attribution` is the last visit to the app that arrived with a click ID or UTM, as stored by
-  Opus. Every field may be `null` (a direct or organic visit).
+  Opus. `landingUrl` is that page's origin and path only: the sender drops the query string, so
+  click IDs and UTMs travel only in `click` and `utm`. Every field may be `null` (a direct or
+  organic visit).
 - `flags.staffInitiated` is `true` when Forte staff booked while impersonating the account.
   Such bookings are recorded but never delivered, like staff-booked Acuity appointments.
 - Required: `schemaVersion`, `type`, `eventId`, `occurredAt`, `booking.lessonId` (letters,
@@ -94,15 +100,23 @@ of a captured request; resends re-sign with a fresh timestamp.
 
 | Status | Body | Meaning |
 | --- | --- | --- |
-| 200 | `{ "ok": true, "eventId", "canonicalEventId", "queued" }` | Recorded; `queued` says whether any delivery was queued |
-| 200 | `{ "ok": true, "eventId", "deduped": true, "requeued" }` | This `eventId` was already recorded; nothing was written |
+| 200 | `{ "ok": true, "eventId", "canonicalEventId", "queued" }` | Recorded. See `queued` below |
+| 200 | `{ "ok": true, "eventId", "deduped": true, "requeued" }` | This booking's event already exists; see resends below |
 | 400 | `{ "ok": false, "error" }` | Body does not match the contract; `error` names the fields. Do not retry unchanged |
 | 401 | `{ "ok": false, "error" }` | Missing, bad or stale signature |
-| 500 | `{ "ok": false, "error" }` | No secret configured, a database error, or (`"recorded": true`) recorded but not queued; resend |
+| 409 | `{ "ok": false, "eventId", "error": "Conflicting record for this eventId" }` | A row with this ID exists but is not this booking's event. Nothing written; needs investigation, not a resend |
+| 500 | `{ "ok": false, "error" }` | No secret configured, a database error, or (`"recorded": true`) recorded but not queued |
 
-Recording is idempotent by `eventId`, so a resend is always safe. A resend also queues any
-delivery that was recorded but never attempted (`requeued: true`), which repairs a request that
-failed between recording and queuing. Staff bookings add `"skippedOutbound": true`.
+- `queued: true` means the deliveries were handed to QStash. That hand-off is a no-op when
+  `QSTASH_TOKEN` or `PUBLIC_BASE_URL` is unset, so `queued` does not prove a worker will run.
+  `queued: false` means every delivery was written as `SKIPPED` (or none, for staff bookings).
+- **Resends.** Recording is deduplicated by `eventId`: when a `TRIAL_BOOKED` event for this
+  appointment already exists, the resend writes nothing and answers `deduped: true`. Its
+  deliveries are queued again (`requeued: true`) only if the event is more than 10 minutes old
+  and still has a delivery that is `PENDING` with no attempts, which repairs a request that
+  recorded the event but failed to queue it. Within those 10 minutes the first request's queue
+  message may still be on its way, and requeuing then could deliver twice.
+- Staff bookings add `"skippedOutbound": true`.
 
 ## What gets recorded
 
@@ -130,6 +144,18 @@ The existing QStash worker sends the deliveries.
   `source_system = "opus"`. Acuity events keep `HUBSPOT_SOURCE_SYSTEM`.
 - `GOOGLE_ADS_VALIDATE_ONLY=true` uploads are recorded as `SKIPPED`, not `SUCCESS`, for both
   booking systems: Google checks them but records nothing.
+- An Opus event is only ever delivered to a platform that is `GOOGLE_ADS` or `HUBSPOT` and is
+  listed in `OPUS_DELIVERY_PLATFORMS` when the worker runs; any other delivery row is marked
+  `SKIPPED` without calling the platform.
+- `va_attrib` values shaped like `opus_…` are never accepted from a browser: ingest replaces a
+  cookie that is not one of its UUID tokens, and the Acuity webhook ignores such an intake
+  value.
+
+### Rollout
+
+A delivery recorded as `SKIPPED` (its platform was off in `OPUS_DELIVERY_PLATFORMS`, or Google
+ran in validate-only mode) is never delivered later, even after the setting changes. Turn each
+platform on, and validate-only off, before the bookings you want delivered.
 
 ## Configuration
 

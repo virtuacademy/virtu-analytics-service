@@ -4,6 +4,7 @@ import { sha256Base64, sha256Hex } from "@/lib/crypto";
 import { timingSafeEqual } from "@/lib/auth";
 import { fetchAppointmentById, appointmentSnapshot, extractIntakeValue } from "@/lib/acuity";
 import { enqueueDelivery } from "@/lib/qstash";
+import { OPUS_EVENT_ID_PREFIX } from "@/lib/bookingSource";
 
 export const runtime = "nodejs";
 
@@ -104,7 +105,9 @@ export async function POST(req: NextRequest) {
   const FBP_FIELD_ID = Number(process.env.ACUITY_FIELD_FBP_ID || "0") || null;
   const FBC_FIELD_ID = Number(process.env.ACUITY_FIELD_FBC_ID || "0") || null;
 
-  const vaAttrib = VA_ATTRIB_FIELD_ID ? extractIntakeValue(appt, VA_ATTRIB_FIELD_ID) : null;
+  const vaAttribIntake = VA_ATTRIB_FIELD_ID ? extractIntakeValue(appt, VA_ATTRIB_FIELD_ID) : null;
+  // `opus_` tokens belong to Opus bookings; an intake value can never point at one.
+  const vaAttrib = vaAttribIntake?.startsWith(OPUS_EVENT_ID_PREFIX) ? null : vaAttribIntake;
   const gclid = GCLID_FIELD_ID ? extractIntakeValue(appt, GCLID_FIELD_ID) : null;
   const ttclid = TTCLID_FIELD_ID ? extractIntakeValue(appt, TTCLID_FIELD_ID) : null;
   const fbp = FBP_FIELD_ID ? extractIntakeValue(appt, FBP_FIELD_ID) : null;

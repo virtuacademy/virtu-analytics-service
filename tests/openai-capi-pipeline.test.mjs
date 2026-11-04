@@ -226,6 +226,7 @@ test("Acuity changed queues first bookings, skips historical edits, and keeps st
         appointmentSnapshot: () => ({ scheduledBy: staff ? "staff" : null }),
       },
       "@/lib/qstash": { enqueueDelivery: async (id) => queued.push(id) },
+      "@/lib/bookingSource": loadRoute("../src/lib/bookingSource.ts", {}),
       "@/lib/prisma": {
         prisma: {
           inboundWebhook: { create: async () => {} },

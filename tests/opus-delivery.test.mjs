@@ -109,6 +109,7 @@ function worker(options = {}) {
         deliveries: [
           { id: "google", platform: "GOOGLE_ADS", status: "PENDING" },
           { id: "hubspot", platform: "HUBSPOT", status: "PENDING" },
+          ...(options.extraDeliveries ?? []),
         ],
       }),
     },
@@ -139,8 +140,11 @@ function worker(options = {}) {
     },
     delivery: { update: async (update) => updates.push(update) },
   };
-  const unexpected = () => {
-    throw new Error("Opus bookings must not reach this platform");
+  // Other platforms record calls instead of throwing, so a test can prove none happened.
+  const otherCalls = [];
+  const unexpected = async (args) => {
+    otherCalls.push(args);
+    return { skipped: true, reason: "stub" };
   };
   const { POST } = loadTsModule(
     new URL("../src/app/api/qstash/deliver/route.ts", import.meta.url),
@@ -182,6 +186,7 @@ function worker(options = {}) {
           QSTASH_CURRENT_SIGNING_KEY: "synthetic",
           QSTASH_NEXT_SIGNING_KEY: "synthetic",
           HUBSPOT_SOURCE_SYSTEM: "attrib.virtu.academy",
+          OPUS_DELIVERY_PLATFORMS: options.opusPlatforms ?? "GOOGLE_ADS,HUBSPOT",
         },
       },
     },
@@ -192,7 +197,7 @@ function worker(options = {}) {
       headers: new Headers({ "upstash-signature": "synthetic" }),
     });
   const statusOf = (id) => updates.find((u) => u.where.id === id)?.data;
-  return { invoke, googleCalls, hubspotCalls, statusOf };
+  return { invoke, googleCalls, hubspotCalls, otherCalls, statusOf };
 }
 
 test("an Opus booking reaches Google Ads and HubSpot as an Opus conversion", async () => {
@@ -214,11 +219,29 @@ test("an Opus booking reaches Google Ads and HubSpot as an Opus conversion", asy
   assert.equal(w.statusOf("hubspot").status, "SUCCESS");
 });
 
-test("Acuity bookings keep the Acuity source and HubSpot source system", async () => {
+test("Acuity bookings keep the Acuity source, HubSpot source system and session-only IP", async () => {
   const w = worker({ appointmentId: "123" });
   await w.invoke();
   assert.equal(w.googleCalls[0].source, "acuity");
+  assert.equal(w.googleCalls[0].userIpAddress, null);
   assert.equal(w.hubspotCalls[0].sourceSystem, "attrib.virtu.academy");
+});
+
+test("an Opus event never reaches a platform outside Google Ads and HubSpot", async () => {
+  const w = worker({ extraDeliveries: [{ id: "meta", platform: "META", status: "PENDING" }] });
+  await w.invoke();
+  assert.equal(w.otherCalls.length, 0);
+  assert.equal(w.statusOf("meta").status, "SKIPPED");
+  assert.match(w.statusOf("meta").responseBody, /OPUS_DELIVERY_PLATFORMS/);
+  assert.equal(w.statusOf("google").status, "SUCCESS");
+});
+
+test("an Opus platform switched off after recording is skipped at delivery time", async () => {
+  const w = worker({ opusPlatforms: "HUBSPOT" });
+  await w.invoke();
+  assert.equal(w.googleCalls.length, 0);
+  assert.equal(w.statusOf("google").status, "SKIPPED");
+  assert.equal(w.statusOf("hubspot").status, "SUCCESS");
 });
 
 test("validate-only Google uploads are SKIPPED, not SUCCESS, for both booking systems", async () => {

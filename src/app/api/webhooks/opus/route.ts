@@ -12,6 +12,9 @@ import { OPUS_DELIVERY_PLATFORMS, enabledOpusDeliveryPlatforms } from "@/lib/boo
 export const runtime = "nodejs";
 
 const SIGNATURE_TOLERANCE_SECONDS = 300;
+// A just-recorded event may already be queued with the worker not yet run, and the worker
+// has no claim step, so a resend only requeues deliveries left unattempted this long.
+const REQUEUE_AFTER_MS = 10 * 60 * 1000;
 const STAFF_SCHEDULED_BY = "opus:staff";
 
 const isoDateTime = z.string().datetime({ offset: true });
@@ -209,20 +212,25 @@ async function record(raw: string, payload: TrialBookedPayload) {
   });
 }
 
-// A resend of an already-recorded booking changes nothing, except that deliveries
-// which were never attempted (the first request recorded the event but could not
-// queue it) are queued again.
-async function requeueUnattempted(eventId: string): Promise<boolean> {
+// A unique violation is a resend only when this booking's event already exists; anything
+// else (for example an unrelated Attribution row with the same token) is a conflict.
+// A resend writes nothing. Deliveries still unattempted after REQUEUE_AFTER_MS (the first
+// request recorded the event but could not queue it) are queued again.
+async function resolveDuplicate(
+  eventId: string,
+): Promise<{ duplicate: false } | { duplicate: true; requeued: boolean }> {
   const existing = await prisma.canonicalEvent.findFirst({
     where: { appointmentId: eventId, name: "TRIAL_BOOKED" },
     include: { deliveries: true },
   });
-  const unattempted = existing?.deliveries.some(
+  if (!existing) return { duplicate: false };
+  const stale = Date.now() - existing.createdAt.getTime() > REQUEUE_AFTER_MS;
+  const unattempted = existing.deliveries.some(
     (delivery) => delivery.status === "PENDING" && delivery.attempts === 0,
   );
-  if (!existing || !unattempted) return false;
+  if (!stale || !unattempted) return { duplicate: true, requeued: false };
   await enqueueDelivery(existing.id);
-  return true;
+  return { duplicate: true, requeued: true };
 }
 
 export async function POST(req: NextRequest) {
@@ -264,8 +272,15 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     if (isUniqueViolation(error)) {
       try {
-        const requeued = await requeueUnattempted(eventId);
-        return NextResponse.json({ ok: true, eventId, deduped: true, requeued });
+        const outcome = await resolveDuplicate(eventId);
+        if (!outcome.duplicate) {
+          console.error("Opus webhook: conflicting record", { eventId });
+          return NextResponse.json(
+            { ok: false, eventId, error: "Conflicting record for this eventId" },
+            { status: 409 },
+          );
+        }
+        return NextResponse.json({ ok: true, eventId, deduped: true, requeued: outcome.requeued });
       } catch {
         console.error("Opus webhook: requeue failed", { eventId });
         return NextResponse.json(

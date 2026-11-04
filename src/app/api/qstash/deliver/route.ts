@@ -6,7 +6,7 @@ import { sendHubSpotEvent } from "@/lib/outbound/hubspot";
 import { sendGoogleAdsClickConversion } from "@/lib/outbound/googleAds";
 import { sendTikTokEvent } from "@/lib/outbound/tiktok";
 import { sendOpenAIConversion, validateOpenAIConversion } from "@/lib/outbound/openai.mjs";
-import { bookingSourceFor } from "@/lib/bookingSource";
+import { bookingSourceFor, isOpusDeliveryEnabled } from "@/lib/bookingSource";
 
 export const runtime = "nodejs";
 
@@ -165,8 +165,10 @@ export async function POST(req: NextRequest) {
   const email = appt?.email ?? null;
   const phone = appt?.phone ?? null;
   // Opus bookings have no ingest session; their IP and user agent arrive on the Attribution row.
-  const ip = session?.ipFirst ?? attrib?.ipAddress ?? null;
-  const userAgent = session?.uaFirst ?? attrib?.userAgent ?? null;
+  // Acuity sends keep using the session only.
+  const opusAttrib = source === "opus" ? attrib : null;
+  const ip = session?.ipFirst ?? opusAttrib?.ipAddress ?? null;
+  const userAgent = session?.uaFirst ?? opusAttrib?.userAgent ?? null;
   const mockOutbound = process.env.OUTBOUND_MODE === "mock";
   let retryOpenAI = false;
 
@@ -191,6 +193,18 @@ export async function POST(req: NextRequest) {
         },
       });
     };
+
+    // Opus bookings may only reach the platforms enabled now, whatever rows exist.
+    if (
+      source === "opus" &&
+      !isOpusDeliveryEnabled(d.platform, process.env.OPUS_DELIVERY_PLATFORMS)
+    ) {
+      await mark({
+        status: "SKIPPED",
+        responseBody: `Opus delivery to ${d.platform} is off (not an Opus platform, or not listed in OPUS_DELIVERY_PLATFORMS)`,
+      });
+      continue;
+    }
 
     try {
       if (d.platform === "OPENAI") {

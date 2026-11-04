@@ -29,7 +29,7 @@ High-level flow:
 
 ### Opus trial bookings
 
-Opus (app.fortelessons.com) books trial lessons without Acuity and cannot read `.virtu.academy` cookies, so it posts each booking, with the click IDs and UTMs it captured, to the signed `POST /api/webhooks/opus`. The service records it under `opus_<lessonId>` (Appointment, Attribution, `TRIAL_BOOKED` canonical event) and delivers it to Google Ads and HubSpot only: Google Ads uses a separate `opus:TRIAL_BOOKED` conversion action and HubSpot gets `source_system = "opus"`. `OPUS_DELIVERY_PLATFORMS` switches each platform on; until then deliveries are recorded as `SKIPPED`. Full contract: [opus-trial-webhook.md](opus-trial-webhook.md).
+Opus (app.fortelessons.com) books trial lessons without Acuity and cannot read `.virtu.academy` cookies, so it posts each booking, with the click IDs and UTMs it captured, to the signed `POST /api/webhooks/opus`. The service records it under `opus_<lessonId>` (Appointment, Attribution, `TRIAL_BOOKED` canonical event) and delivers it to Google Ads and HubSpot only: Google Ads uses a separate `opus:TRIAL_BOOKED` conversion action and HubSpot gets `source_system = "opus"`. `OPUS_DELIVERY_PLATFORMS` switches each platform on; until then deliveries are recorded as `SKIPPED` and are never delivered later, so turn platforms on before the bookings you want delivered. The worker also skips any Opus delivery to a platform that is not enabled when it runs. Full contract: [opus-trial-webhook.md](opus-trial-webhook.md).
 
 ## Current behavior (v1)
 
@@ -318,7 +318,7 @@ Google Ads:
 - Uses `UploadClickConversions` (enhanced conversions for leads).
 - Sends `gclid` / `gbraid` / `wbraid` when present plus hashed email/phone identifiers (names are not used today).
 - Sets `order_id` to `eventId` unless provided (e.g. test endpoint override).
-- Uses `amountPaid` as `conversion_value` when available; otherwise no value is sent.
+- Uses `amountPaid` as `conversion_value` when available; otherwise no value is sent. Opus events upload `valueCents / 100` (the trial's price to the learner, including the processing fee, before discounts or credit). Conversion actions set to use the same value for each conversion, as the Acuity and Opus trial actions are ($280), ignore the uploaded value.
 - Sets `conversion_date_time` using `GOOGLE_ADS_CONVERSION_TIMEZONE` or `GOOGLE_ADS_CONVERSION_TIMEZONE_OFFSET`.
 - Conversion action mapping uses `GOOGLE_ADS_CONVERSION_ACTIONS` (comma-separated `EVENT=ID`) with `GOOGLE_ADS_CONVERSION_ACTION_ID` fallback. Opus events use only `opus:EVENT=ID` entries and are skipped, never sent to the Acuity action, when that entry is missing.
 - With `GOOGLE_ADS_VALIDATE_ONLY=true`, Google validates the upload but records no conversion; the delivery is marked `SKIPPED` (not `SUCCESS`) with a `GOOGLE_ADS_VALIDATE_ONLY:` response note.
