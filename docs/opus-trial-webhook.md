@@ -137,9 +137,16 @@ One transaction writes:
 The existing QStash worker sends the deliveries.
 
 - **Google Ads:** uploads to the action mapped as `opus:TRIAL_BOOKED` in
-  `GOOGLE_ADS_CONVERSION_ACTIONS` (for example
-  `TRIAL_BOOKED=7447834932,opus:TRIAL_BOOKED=<Opus action ID>`). Opus events never fall back to
-  the Acuity action; without the mapping the delivery is `SKIPPED`.
+  `GOOGLE_ADS_CONVERSION_ACTIONS`. Production:
+  `TRIAL_BOOKED=7447834932,opus:TRIAL_BOOKED=7889634403`, where 7889634403 is "Attrib - Opus
+  Trial Lesson Scheduled" (created 2026-11-04 as a secondary action with the Acuity action's
+  settings). Opus events never fall back to the Acuity action; without the mapping the delivery
+  is `SKIPPED`.
+- **Consent:** like Acuity uploads, Opus uploads mark `adUserData` and `adPersonalization` as
+  granted, and nothing checks the visitor's cookie choice on the marketing site. Gating Opus
+  reports on Termly advertising consent is planned for v2: the marketing site's link helpers
+  would carry click IDs plus a consent marker only after consent, checked in the browser when
+  the link is clicked.
 - **HubSpot:** sends the same `HUBSPOT_EVENT_NAMES` event as Acuity, with
   `source_system = "opus"`. Acuity events keep `HUBSPOT_SOURCE_SYSTEM`.
 - `GOOGLE_ADS_VALIDATE_ONLY=true` uploads are recorded as `SKIPPED`, not `SUCCESS`, for both
@@ -163,6 +170,6 @@ platform on, and validate-only off, before the bookings you want delivered.
 | --- | --- | --- |
 | `OPUS_WEBHOOK_SECRET` | attrib | Shared HMAC secret. The endpoint answers 500 without it. |
 | `OPUS_DELIVERY_PLATFORMS` | attrib | Comma list of `GOOGLE_ADS`, `HUBSPOT`. Empty means record only. |
-| `GOOGLE_ADS_CONVERSION_ACTIONS` | attrib | Add `opus:TRIAL_BOOKED=<id>`. |
+| `GOOGLE_ADS_CONVERSION_ACTIONS` | attrib | Add `opus:TRIAL_BOOKED=7889634403`. |
 | `ATTRIB_WEBHOOK_URL` | Opus | Full endpoint URL. Opus sends nothing without it. |
 | `ATTRIB_WEBHOOK_SECRET` | Opus | Same value as `OPUS_WEBHOOK_SECRET`. |
