@@ -81,10 +81,17 @@ of a captured request; resends re-sign with a fresh timestamp.
   Google Ads conversion value, but the Opus conversion action is set to use the same value for
   each conversion ($280, matching the Acuity action), so Google ignores the uploaded value.
 - `client` is the booker's IP and user agent from the booking request.
-- `attribution` is the last visit to the app that arrived with a click ID or UTM, as stored by
-  Opus. `landingUrl` is that page's origin and path only: the sender drops the query string, so
-  click IDs and UTMs travel only in `click` and `utm`. Every field may be `null` (a direct or
-  organic visit).
+- `attribution` is what Opus stored from the visitor's visits to the app that arrived with a
+  click ID or UTM:
+  - `utm`, `landingUrl`, `referrer` and `lastTouchAt` come from the latest such visit. A visit
+    with any UTM replaces the whole UTM set rather than mixing campaigns.
+  - Each `click` ID is the latest one for its platform, from whichever visit brought it, dropped
+    once it is more than 90 days older than the booking. An ad click followed by a newsletter
+    visit therefore sends the ad's gclid with the newsletter's UTMs.
+  - `firstTouchAt` is the first such visit.
+  - `landingUrl` and `referrer` are origin and path only; click IDs and UTMs travel only in
+    `click` and `utm`.
+  - Every field may be `null` (a direct or organic visit).
 - `flags.staffInitiated` is `true` when Forte staff booked while impersonating the account.
   Such bookings are recorded but never delivered, like staff-booked Acuity appointments.
 - Required: `schemaVersion`, `type`, `eventId`, `occurredAt`, `booking.lessonId` (letters,
