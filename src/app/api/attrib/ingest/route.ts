@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { randomId } from "@/lib/crypto";
 import { withCors } from "@/lib/cors";
 import { setCookie, setReadableCookie, COOKIE_DOMAIN } from "@/lib/cookies";
+import { ingestIdOrNull } from "@/lib/attribToken";
 
 export const runtime = "nodejs";
 
@@ -12,6 +13,12 @@ type IngestBody = {
   utm?: Record<string, string | null | undefined>;
   click?: Record<string, string | null | undefined>;
   hubspotutk?: string | null;
+  // Sites other than virtu.academy (e.g. www.fortelessons.com) never get this service's
+  // cookies back, so they keep the IDs from the response in their own first-party cookies
+  // and send them here. Each is used only when its cookie is missing, and only if UUID-shaped.
+  vid?: unknown;
+  sid?: unknown;
+  attribTok?: unknown;
 };
 
 function getIp(req: NextRequest): string | null {
@@ -59,9 +66,11 @@ export async function POST(req: NextRequest) {
     return withCors(res, origin);
   }
 
-  const existingVid = req.cookies.get("va_vid")?.value ?? null;
-  const existingSid = req.cookies.get("va_sid")?.value ?? null;
-  const existingAttrib = req.cookies.get("va_attrib")?.value ?? null;
+  const existingVid = req.cookies.get("va_vid")?.value ?? ingestIdOrNull(body?.vid);
+  const existingSid = req.cookies.get("va_sid")?.value ?? ingestIdOrNull(body?.sid);
+  // A malformed va_attrib cookie counts as missing (see ingestIdOrNull).
+  const existingAttrib =
+    ingestIdOrNull(req.cookies.get("va_attrib")?.value) ?? ingestIdOrNull(body?.attribTok);
 
   const t = now();
   const vid = existingVid ?? randomId();

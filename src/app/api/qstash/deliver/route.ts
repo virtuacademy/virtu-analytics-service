@@ -6,6 +6,7 @@ import { sendHubSpotEvent } from "@/lib/outbound/hubspot";
 import { sendGoogleAdsClickConversion } from "@/lib/outbound/googleAds";
 import { sendTikTokEvent } from "@/lib/outbound/tiktok";
 import { sendOpenAIConversion, validateOpenAIConversion } from "@/lib/outbound/openai.mjs";
+import { bookingSourceFor, isOpusDeliveryEnabled } from "@/lib/bookingSource";
 
 export const runtime = "nodejs";
 
@@ -119,8 +120,16 @@ export async function POST(req: NextRequest) {
     ? await prisma.appointment.findUnique({ where: { id: ce.appointmentId } })
     : null;
   const scheduledBy = appt?.scheduledBy?.trim() ?? "";
+  const source = bookingSourceFor(ce.appointmentId ?? ce.eventId);
 
   if (scheduledBy) {
+    const staffBooking =
+      source === "opus"
+        ? { reason: "booked by Forte staff in Opus", skipReason: "scheduled_by_opus_staff" }
+        : {
+            reason: "appointment scheduled by logged-in Acuity user",
+            skipReason: "scheduled_by_acuity_user",
+          };
     for (const d of ce.deliveries) {
       if (d.status === "SUCCESS" || d.status === "SKIPPED") continue;
 
@@ -130,7 +139,7 @@ export async function POST(req: NextRequest) {
           status: "SKIPPED",
           attempts: { increment: 1 },
           lastAttemptAt: new Date(),
-          responseBody: `Skipped outbound: appointment scheduled by logged-in Acuity user (${scheduledBy})`,
+          responseBody: `Skipped outbound: ${staffBooking.reason} (${scheduledBy})`,
         },
       });
     }
@@ -138,7 +147,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       skippedOutbound: true,
-      skipReason: "scheduled_by_acuity_user",
+      skipReason: staffBooking.skipReason,
       scheduledBy,
     });
   }
@@ -155,8 +164,11 @@ export async function POST(req: NextRequest) {
   const eventId = ce.appointmentId ?? ce.eventId;
   const email = appt?.email ?? null;
   const phone = appt?.phone ?? null;
-  const ip = session?.ipFirst ?? null;
-  const userAgent = session?.uaFirst ?? null;
+  // Opus bookings have no ingest session; their IP and user agent arrive on the Attribution row.
+  // Acuity sends keep using the session only.
+  const opusAttrib = source === "opus" ? attrib : null;
+  const ip = session?.ipFirst ?? opusAttrib?.ipAddress ?? null;
+  const userAgent = session?.uaFirst ?? opusAttrib?.userAgent ?? null;
   const mockOutbound = process.env.OUTBOUND_MODE === "mock";
   let retryOpenAI = false;
 
@@ -181,6 +193,18 @@ export async function POST(req: NextRequest) {
         },
       });
     };
+
+    // Opus bookings may only reach the platforms enabled now, whatever rows exist.
+    if (
+      source === "opus" &&
+      !isOpusDeliveryEnabled(d.platform, process.env.OPUS_DELIVERY_PLATFORMS)
+    ) {
+      await mark({
+        status: "SKIPPED",
+        responseBody: `Opus delivery to ${d.platform} is off (not an Opus platform, or not listed in OPUS_DELIVERY_PLATFORMS)`,
+      });
+      continue;
+    }
 
     try {
       if (d.platform === "OPENAI") {
@@ -268,7 +292,11 @@ export async function POST(req: NextRequest) {
             utmCampaign: attrib?.utmCampaign ?? null,
             utmTerm: attrib?.utmTerm ?? null,
             utmContent: attrib?.utmContent ?? null,
-            sourceSystem: process.env.HUBSPOT_SOURCE_SYSTEM ?? "attrib.virtu.academy",
+            // HubSpot reports split Acuity and Opus trials on this property.
+            sourceSystem:
+              source === "opus"
+                ? "opus"
+                : (process.env.HUBSPOT_SOURCE_SYSTEM ?? "attrib.virtu.academy"),
           });
 
           if (r.skipped) {
@@ -302,14 +330,19 @@ export async function POST(req: NextRequest) {
             firstName: appt?.firstName ?? null,
             lastName: appt?.lastName ?? null,
             userIpAddress: ip,
+            source,
           });
           if (r.skipped) {
             await mark({ status: "SKIPPED", responseBody: r.reason });
           } else {
+            // A validate-only upload is checked by Google but records no conversion.
+            const validatedOnly = r.ok && r.validateOnly;
             await mark({
-              status: r.ok ? "SUCCESS" : "FAILED",
+              status: r.ok ? (validatedOnly ? "SKIPPED" : "SUCCESS") : "FAILED",
               responseCode: r.status,
-              responseBody: r.body,
+              responseBody: validatedOnly
+                ? `GOOGLE_ADS_VALIDATE_ONLY: Google checked this upload but recorded no conversion. ${r.body}`
+                : r.body,
               requestBody: r.requestBody,
             });
           }

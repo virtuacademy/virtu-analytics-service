@@ -14,7 +14,7 @@ A signed QStash diagnostic message `{ "kind": "openai_validation", "validationId
 
 ### Existing attribution flow
 
-This service is the source of truth for attribution and conversions across Webflow + Acuity today and the Opus app later.
+This service is the source of truth for attribution and conversions across Webflow + Acuity and the Opus app.
 
 High-level flow:
 1) Webflow loads on each page and calls `/api/attrib/ingest`.
@@ -26,6 +26,10 @@ High-level flow:
 4) Acuity webhook (`changed`) calls `/api/webhooks/acuity`.
 5) Analytics app fetches appointment details, joins intake fields, creates canonical events, and queues deliveries (if QStash is configured).
 6) `/api/qstash/deliver` sends server-side events to Meta/Google/TikTok/HubSpot and logs delivery status.
+
+### Opus trial bookings
+
+Opus (app.fortelessons.com) books trial lessons without Acuity and cannot read `.virtu.academy` cookies. The Forte marketing site (www.fortelessons.com) calls `/api/attrib/ingest` on every page view and keeps the returned IDs in its own `.fortelessons.com` cookies (`va_attrib`, `va_vid`, `va_sid`), sending them back in the ingest body. Opus posts each booking, with that `va_attrib` token and the click IDs and UTMs it captured itself, to the signed `POST /api/webhooks/opus`, which snapshots the visitor's ingest row and uses Opus's capture only for missing fields. The service records it under `opus_<lessonId>` (Appointment, Attribution, `TRIAL_BOOKED` canonical event) and delivers it to Google Ads and HubSpot only: Google Ads uses a separate `opus:TRIAL_BOOKED` conversion action and HubSpot gets `source_system = "opus"`. `OPUS_DELIVERY_PLATFORMS` switches each platform on; until then deliveries are recorded as `SKIPPED` and are never delivered later, so turn platforms on before the bookings you want delivered. The worker also skips any Opus delivery to a platform that is not enabled when it runs. Full contract: [opus-trial-webhook.md](opus-trial-webhook.md).
 
 ## Current behavior (v1)
 
@@ -63,10 +67,11 @@ Why this matters:
 ## Endpoints
 
 Public (CORS-protected):
-- `POST /api/attrib/ingest` (also supports `OPTIONS` preflight)
+- `POST /api/attrib/ingest` (also supports `OPTIONS` preflight). Optional body fields `vid`, `sid` and `attribTok` let a site that never receives this service's cookies (www.fortelessons.com) send back the IDs from an earlier response; each is used only when its cookie is missing and only if UUID-shaped, otherwise a fresh ID is issued. A `va_attrib` cookie that is not a UUID is also replaced. See [the ingest contract](opus-trial-webhook.md#ingest-contract-for-the-marketing-site).
 
 Internal (signed):
 - `POST /api/webhooks/acuity` - verifies signature, fetches appointment, creates canonical events, queues deliveries.
+- `POST /api/webhooks/opus` - verifies the Opus HMAC signature, records one `TRIAL_BOOKED` event per Opus lesson (idempotent), queues Google Ads/HubSpot deliveries. See [opus-trial-webhook.md](opus-trial-webhook.md).
 - `POST /api/qstash/deliver` - verifies QStash signature and sends outbound deliveries.
 
 Debug:
@@ -90,12 +95,13 @@ Dashboard:
 See `.env.example` for the full list. Key values:
 - `DATABASE_URL` - Postgres connection string
 - `PUBLIC_BASE_URL` - e.g. `https://analytics.virtu.academy`
-- `ALLOWED_ORIGINS` - comma-separated Webflow origins (CORS)
+- `ALLOWED_ORIGINS` - comma-separated origins allowed to call ingest (CORS): the Webflow origins plus `https://www.fortelessons.com` and `https://fortelessons.com`
 - `COOKIE_DOMAIN` - `.virtu.academy` (prod only; dev uses host-only cookies)
 - Acuity: `ACUITY_USER_ID`, `ACUITY_API_KEY`, intake field IDs, `ACUITY_TRIAL_APPOINTMENT_TYPE_IDS` (comma-separated), `ACUITY_TRIAL_APPOINTMENT_TYPE_ID` (legacy fallback), `ACUITY_WEBHOOK_FORWARD_URL` (optional legacy forward)
 - QStash: `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`
 - Meta: `META_PIXEL_ID`, `META_CAPI_ACCESS_TOKEN`, `META_CAPI_EVENT_NAME(S)`, optional `META_CAPI_TEST_EVENT_CODE`, `META_CAPI_API_VERSION`, `META_CAPI_LDU_ENABLED`, `META_CAPI_PREDICTED_LTV`, `META_CAPI_TEST_SECRET`
 - HubSpot: `HUBSPOT_PRIVATE_APP_TOKEN`, `HUBSPOT_EVENT_NAMES`, optional `HUBSPOT_SOURCE_SYSTEM`
+- Opus: `OPUS_WEBHOOK_SECRET`, `OPUS_DELIVERY_PLATFORMS`
 - Google Ads: `GOOGLE_ADS_DEVELOPER_TOKEN`, OAuth creds, `GOOGLE_ADS_CUSTOMER_ID`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID`, `GOOGLE_ADS_CONVERSION_ACTION_ID(S)`, `GOOGLE_ADS_CONVERSION_ACTIONS` (per-event mapping), `GOOGLE_ADS_DEFAULT_PHONE_COUNTRY_CODE`, `GOOGLE_ADS_CONVERSION_TIMEZONE(_OFFSET)`, `GOOGLE_ADS_AD_USER_DATA_CONSENT`, `GOOGLE_ADS_AD_PERSONALIZATION_CONSENT` (currently ignored by code), optional `GOOGLE_ADS_VALIDATE_ONLY`/`GOOGLE_ADS_JOB_ID`
 - TikTok: `TIKTOK_PIXEL_ID`, `TIKTOK_ACCESS_TOKEN`, optional `TIKTOK_EVENT_ACTIONS`, `TIKTOK_TEST_EVENT_CODE`, `TIKTOK_DEFAULT_PHONE_COUNTRY_CODE`
 - Optional: `META_CAPI_TEST_SECRET`, `GOOGLE_ADS_TEST_SECRET`, `HUBSPOT_TEST_SECRET`, `TIKTOK_TEST_SECRET` (test endpoints)
@@ -312,9 +318,11 @@ Google Ads:
 - Uses `UploadClickConversions` (enhanced conversions for leads).
 - Sends `gclid` / `gbraid` / `wbraid` when present plus hashed email/phone identifiers (names are not used today).
 - Sets `order_id` to `eventId` unless provided (e.g. test endpoint override).
-- Uses `amountPaid` as `conversion_value` when available; otherwise no value is sent.
+- Uses `amountPaid` as `conversion_value` when available; otherwise no value is sent. Opus events upload `valueCents / 100` (the trial's price to the learner, including the processing fee, before discounts or credit). Conversion actions set to use the same value for each conversion, as the Acuity and Opus trial actions are ($280), ignore the uploaded value.
 - Sets `conversion_date_time` using `GOOGLE_ADS_CONVERSION_TIMEZONE` or `GOOGLE_ADS_CONVERSION_TIMEZONE_OFFSET`.
-- Conversion action mapping uses `GOOGLE_ADS_CONVERSION_ACTIONS` (comma-separated `EVENT=ID`) with `GOOGLE_ADS_CONVERSION_ACTION_ID` fallback.
+- Conversion action mapping uses `GOOGLE_ADS_CONVERSION_ACTIONS` (comma-separated `EVENT=ID`) with `GOOGLE_ADS_CONVERSION_ACTION_ID` fallback. Opus events use only `opus:EVENT=ID` entries and are skipped, never sent to the Acuity action, when that entry is missing.
+- With `GOOGLE_ADS_VALIDATE_ONLY=true`, Google validates the upload but records no conversion; the delivery is marked `SKIPPED` (not `SUCCESS`) with a `GOOGLE_ADS_VALIDATE_ONLY:` response note.
+- `CLICK_NOT_FOUND` partial failures still count as `SUCCESS`; watch their rate in the response bodies.
 - Skips uploads with no click IDs and no user identifiers.
 
 TikTok:
@@ -329,7 +337,7 @@ TikTok:
 HubSpot:
 - Uses the Custom Events API (Events v3 `send`) and maps canonical events via `HUBSPOT_EVENT_NAMES`.
 - Requires `email` or `utk` for any event; if both are available they are sent to associate the event to a contact.
-- Event properties: `event_id`, `source_system`, and default attribution fields like `hs_page_url`, `hs_referrer`, `hs_utm_source`, `hs_utm_medium`, `hs_utm_campaign`, `hs_utm_term`, `hs_utm_content`, `hs_user_agent`.
+- Event properties: `event_id`, `source_system` (`HUBSPOT_SOURCE_SYSTEM` for Acuity, `opus` for Opus bookings), and default attribution fields like `hs_page_url`, `hs_referrer`, `hs_utm_source`, `hs_utm_medium`, `hs_utm_campaign`, `hs_utm_term`, `hs_utm_content`, `hs_user_agent`.
 
 ## GraphQL debug queries
 

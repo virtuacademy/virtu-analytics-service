@@ -3,6 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import { FilterBar } from "./FilterBar";
+import { bookingSourceFor } from "@/lib/bookingSource";
 
 type Appointment = {
   id: string;
@@ -27,7 +28,7 @@ type AppointmentsSectionProps = {
   selectedAppointmentId: string | null;
 };
 
-type FilterType = "all" | "trial" | "leads";
+type FilterType = "all" | "trial" | "leads" | "opus";
 
 const FILTER_OPTIONS = [
   {
@@ -72,7 +73,27 @@ const FILTER_OPTIONS = [
       </svg>
     ),
   },
+  {
+    id: "opus",
+    label: "Opus Only",
+    icon: (
+      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M9 19V6l12-3v13M9 19a3 3 0 11-6 0 3 3 0 016 0zm12-3a3 3 0 11-6 0 3 3 0 016 0z"
+        />
+      </svg>
+    ),
+  },
 ];
+
+// Every Opus booking is a trial (Meet & Greet); Acuity trials are known by appointment type.
+function isTrial(appt: Appointment, trialAppointmentTypes: string[]): boolean {
+  if (bookingSourceFor(appt.id) === "opus") return true;
+  return !!appt.appointmentTypeId && trialAppointmentTypes.includes(appt.appointmentTypeId);
+}
 
 export function AppointmentsSection({
   appointments,
@@ -84,6 +105,7 @@ export function AppointmentsSection({
 
   // Derive initial filter from URL
   const getInitialFilter = (): FilterType => {
+    if (searchParams.get("opus") === "1") return "opus";
     if (searchParams.get("leads") === "1") return "leads";
     if (searchParams.get("trial") === "1") return "trial";
     return "all";
@@ -96,10 +118,9 @@ export function AppointmentsSection({
   const filteredAppointments = useMemo(() => {
     switch (filter) {
       case "trial":
-        return appointments.filter(
-          (appt) =>
-            appt.appointmentTypeId && trialAppointmentTypes.includes(appt.appointmentTypeId),
-        );
+        return appointments.filter((appt) => isTrial(appt, trialAppointmentTypes));
+      case "opus":
+        return appointments.filter((appt) => bookingSourceFor(appt.id) === "opus");
       case "leads":
         // Leads only: scheduledBy is blank/null (self-scheduled)
         return appointments.filter((appt) => !appt.scheduledBy || appt.scheduledBy.trim() === "");
@@ -117,8 +138,11 @@ export function AppointmentsSection({
       const params = new URLSearchParams(searchParams.toString());
       params.delete("trial");
       params.delete("leads");
+      params.delete("opus");
 
-      if (newFilter === "trial") {
+      if (newFilter === "opus") {
+        params.set("opus", "1");
+      } else if (newFilter === "trial") {
         params.set("trial", "1");
       } else if (newFilter === "leads") {
         params.set("leads", "1");
@@ -269,7 +293,9 @@ export function AppointmentsSection({
                     >
                       <td className="px-4 py-3 font-mono text-xs text-blue-400">{appt.id}</td>
                       <td className="px-4 py-3 text-xs text-zinc-200">
-                        {appt.appointmentTypeId ?? "-"}
+                        {bookingSourceFor(appt.id) === "opus"
+                          ? "Opus trial"
+                          : (appt.appointmentTypeId ?? "-")}
                       </td>
                       <td className="px-4 py-3 text-xs text-zinc-200">
                         {appt.scheduledBy ? (

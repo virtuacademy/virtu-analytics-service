@@ -4,6 +4,7 @@ import { AppointmentModal } from "./components/AppointmentModal";
 import { AppointmentsSection } from "./components/AppointmentsSection";
 import { CollapsibleAttributions } from "./components/CollapsibleAttributions";
 import { CollapsibleCanonicalEvents } from "./components/CollapsibleCanonicalEvents";
+import { OPUS_EVENT_ID_PREFIX } from "@/lib/bookingSource";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,6 +17,7 @@ const TRIAL_APPOINTMENT_TYPES = (process.env.ACUITY_TRIAL_APPOINTMENT_TYPE_IDS ?
 type SearchParams = {
   trial?: string;
   leads?: string;
+  opus?: string;
   appt?: string;
 };
 
@@ -27,8 +29,11 @@ export default async function Home({ searchParams }: { searchParams?: Promise<Se
       ? resolvedSearchParams.appt
       : null;
 
-  // Fetch all appointments - filtering is handled client-side for better UX
+  // The latest appointments; the trial/leads filters run client-side on these. "Opus Only"
+  // queries the server so older Opus bookings are not hidden behind recent Acuity rows.
+  const opusOnly = resolvedSearchParams?.opus === "1";
   const appointments = await prisma.appointment.findMany({
+    where: opusOnly ? { id: { startsWith: OPUS_EVENT_ID_PREFIX } } : undefined,
     orderBy: { updatedAt: "desc" },
     take: 200,
   });
@@ -44,6 +49,7 @@ export default async function Home({ searchParams }: { searchParams?: Promise<Se
   const clearParams = new URLSearchParams();
   if (resolvedSearchParams?.trial === "1") clearParams.set("trial", "1");
   if (resolvedSearchParams?.leads === "1") clearParams.set("leads", "1");
+  if (resolvedSearchParams?.opus === "1") clearParams.set("opus", "1");
   const clearHref = clearParams.toString() ? `/?${clearParams.toString()}` : "/";
 
   const attributions = await prisma.attribution.findMany({
