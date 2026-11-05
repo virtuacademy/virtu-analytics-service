@@ -85,8 +85,6 @@ export async function POST(req: NextRequest) {
     conversionValue: parseNumber(body.conversionValue ?? body.value),
     currencyCode: typeof body.currencyCode === "string" ? body.currencyCode.trim() : undefined,
     gclid: typeof body.gclid === "string" ? body.gclid.trim() : undefined,
-    gbraid: typeof body.gbraid === "string" ? body.gbraid.trim() : undefined,
-    wbraid: typeof body.wbraid === "string" ? body.wbraid.trim() : undefined,
     email: typeof body.email === "string" ? body.email.trim() : undefined,
     phone: typeof body.phone === "string" ? body.phone.trim() : undefined,
     firstName: typeof body.firstName === "string" ? body.firstName.trim() : undefined,
