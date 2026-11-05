@@ -184,13 +184,14 @@ function worker(options = {}) {
       "@/lib/outbound/googleAds": {
         sendGoogleAdsClickConversion: async (args) => {
           googleCalls.push(args);
+          if (options.googleThrows) throw new Error("fetch failed");
           return { ...sent, validateOnly: false, ...options.google };
         },
       },
       "@/lib/outbound/hubspot": {
         sendHubSpotEvent: async (args) => {
           hubspotCalls.push(args);
-          return sent;
+          return { ...sent, ...options.hubspot };
         },
       },
       "@/lib/outbound/meta": { sendMetaCapi: unexpected },
@@ -237,6 +238,27 @@ test("an Opus booking reaches Google Ads and HubSpot as an Opus conversion", asy
 
   assert.equal(w.statusOf("google").status, "SUCCESS");
   assert.equal(w.statusOf("hubspot").status, "SUCCESS");
+});
+
+test("a Google or HubSpot outage or rate limit asks QStash to retry; a rejected upload does not", async () => {
+  const cases = [
+    ["Google 503", { google: { ok: false, status: 503 } }, 503],
+    ["Google network error", { googleThrows: true }, 503],
+    ["HubSpot 429", { hubspot: { ok: false, status: 429 } }, 503],
+    [
+      "Google rejects the click (partial failure, HTTP 200)",
+      { google: { ok: false, status: 200 } },
+      200,
+    ],
+    ["HubSpot 400", { hubspot: { ok: false, status: 400 } }, 200],
+  ];
+  for (const [name, options, expected] of cases) {
+    const w = worker(options);
+    assert.equal((await w.invoke()).status, expected, name);
+    // Both platforms are attempted either way; the failure is recorded before any retry.
+    assert.equal(w.googleCalls.length, 1, name);
+    assert.equal(w.hubspotCalls.length, 1, name);
+  }
 });
 
 test("Acuity bookings keep the Acuity source, HubSpot source system and session-only IP", async () => {
