@@ -81,6 +81,25 @@ test("Opus conversions never fall back to the Acuity or default action", async (
   assert.equal(g.fetchCalls.length, 0);
 });
 
+test("only the gclid is uploaded; a braid-only booking falls back to email and phone", async () => {
+  const clickKeys = (upload) =>
+    Object.keys(upload.conversions[0]).filter((key) => /gclid|braid|userIdentifiers/.test(key));
+
+  // Google rejects braids on one-per-click actions, so they never go out, even next to a gclid.
+  const both = googleAds();
+  await both.send({ gbraid: "B-1", wbraid: "W-1" });
+  assert.deepEqual(clickKeys(both.uploads[0]), ["gclid", "userIdentifiers"]);
+
+  const braidOnly = googleAds();
+  await braidOnly.send({ gclid: null, gbraid: "B-1" });
+  assert.deepEqual(clickKeys(braidOnly.uploads[0]), ["userIdentifiers"]);
+
+  const nothingToMatch = googleAds();
+  const result = await nothingToMatch.send({ gclid: null, gbraid: "B-1", email: null });
+  assert.equal(result.skipped, true);
+  assert.equal(nothingToMatch.fetchCalls.length, 0);
+});
+
 test("validate-only uploads are flagged so they are never counted as delivered", async () => {
   const g = googleAds({ GOOGLE_ADS_VALIDATE_ONLY: "true" });
   const result = await g.send({ source: "opus" });

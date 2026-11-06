@@ -323,8 +323,6 @@ export async function POST(req: NextRequest) {
             conversionValue: ce.value ?? null,
             currencyCode: ce.currency ?? null,
             gclid: appt?.gclid ?? attrib?.gclid ?? null,
-            gbraid: attrib?.gbraid ?? null,
-            wbraid: attrib?.wbraid ?? null,
             email,
             phone,
             firstName: appt?.firstName ?? null,

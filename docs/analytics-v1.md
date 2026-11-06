@@ -61,7 +61,7 @@ From Acuity appointment (intake fields mapped via env):
 
 Why this matters:
 - Meta CAPI uses `event_id` for dedupe and improves match with hashed email/phone plus IP and user agent.
-- Google Ads click conversions primarily use `gclid`/`gbraid`/`wbraid`; enhanced conversions can also use hashed email/phone (names are not used today).
+- Google Ads click conversions use `gclid`; enhanced conversions can also use hashed email/phone (names are not used today). `gbraid`/`wbraid` are captured but not uploaded (see Google Ads below).
 - TikTok Events API can match on `ttclid`, `_ttp`, or hashed identifiers (email/phone/external id).
 
 ## Endpoints
@@ -316,7 +316,8 @@ Meta CAPI:
 
 Google Ads:
 - Uses `UploadClickConversions` (enhanced conversions for leads).
-- Sends `gclid` / `gbraid` / `wbraid` when present plus hashed email/phone identifiers (names are not used today).
+- Sends `gclid` when present plus hashed email/phone identifiers (names are not used today). `gbraid` and `wbraid` are recorded but never uploaded: Google rejects them for actions that count one conversion per click (`ONE_PER_CLICK_CONVERSION_ACTION_NOT_PERMITTED_WITH_BRAID`), as the Acuity and Opus trial actions do, and ignores the email and phone whenever a braid is sent without a `gclid`. Uploading braids would need actions that count every conversion.
+- Calls Google Ads API v26. Google blocks each version about a year after release (v22 was blocked in October 2026), so the version needs bumping roughly yearly.
 - Sets `order_id` to `eventId` unless provided (e.g. test endpoint override).
 - Uses `amountPaid` as `conversion_value` when available; otherwise no value is sent. Opus events upload `valueCents / 100` (the trial's price to the learner, including the processing fee, before discounts or credit). Conversion actions set to use the same value for each conversion, as the Acuity and Opus trial actions are ($280), ignore the uploaded value.
 - Sets `conversion_date_time` using `GOOGLE_ADS_CONVERSION_TIMEZONE` or `GOOGLE_ADS_CONVERSION_TIMEZONE_OFFSET`.

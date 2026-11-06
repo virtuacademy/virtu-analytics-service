@@ -1,6 +1,7 @@
 import { sha256Hex } from "../crypto";
 
-const GOOGLE_ADS_API_VERSION = "v22";
+// Google blocks each API version about a year after release; v22 was blocked in October 2026.
+const GOOGLE_ADS_API_VERSION = "v26";
 const OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 
 type GoogleAdsClickConversionArgs = {
@@ -10,8 +11,6 @@ type GoogleAdsClickConversionArgs = {
   conversionValue?: number | null;
   currencyCode?: string | null;
   gclid?: string | null;
-  gbraid?: string | null;
-  wbraid?: string | null;
   email?: string | null;
   phone?: string | null;
   firstName?: string | null;
@@ -372,12 +371,14 @@ export async function sendGoogleAdsClickConversion(
   }
 
   const identifiers = buildUserIdentifiers(args);
+  // Only the gclid is uploaded. Google rejects gbraid and wbraid for conversion actions that
+  // count one conversion per click, as both trial actions do, and ignores the hashed email and
+  // phone whenever a braid is sent without a gclid. A braid-only booking is still uploaded with
+  // email and phone, which Google can match on its own.
   const gclid = args.gclid?.trim() || null;
-  const gbraid = args.gbraid?.trim() || null;
-  const wbraid = args.wbraid?.trim() || null;
 
-  if (!gclid && !gbraid && !wbraid && identifiers.length === 0) {
-    return { skipped: true, reason: "Missing click IDs and user identifiers" };
+  if (!gclid && identifiers.length === 0) {
+    return { skipped: true, reason: "Missing gclid and user identifiers" };
   }
 
   const customerId = authResult.auth.customerId;
@@ -402,8 +403,6 @@ export async function sendGoogleAdsClickConversion(
   const orderId = args.orderId ?? args.eventId;
   if (orderId) conversion.orderId = orderId;
   if (gclid) conversion.gclid = gclid;
-  if (gbraid) conversion.gbraid = gbraid;
-  if (wbraid) conversion.wbraid = wbraid;
   if (identifiers.length > 0) conversion.userIdentifiers = identifiers;
   if (args.userIpAddress) conversion.userIpAddress = args.userIpAddress;
 
