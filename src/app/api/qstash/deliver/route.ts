@@ -27,6 +27,15 @@ async function verifyQStash(req: NextRequest, body: string) {
   }
 }
 
+// A rate limit or a server error can pass on a later try; any other failure would repeat.
+function isTransientStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+// Platforms whose temporary failures are retried through QStash. A thrown error (for example a
+// network failure) counts as temporary too.
+const RETRIED_PLATFORMS = new Set(["OPENAI", "GOOGLE_ADS", "HUBSPOT"]);
+
 export async function POST(req: NextRequest) {
   const raw = await req.text();
 
@@ -170,7 +179,7 @@ export async function POST(req: NextRequest) {
   const ip = session?.ipFirst ?? opusAttrib?.ipAddress ?? null;
   const userAgent = session?.uaFirst ?? opusAttrib?.userAgent ?? null;
   const mockOutbound = process.env.OUTBOUND_MODE === "mock";
-  let retryOpenAI = false;
+  let retry = false;
 
   for (const d of ce.deliveries) {
     if (d.status === "SUCCESS" || d.status === "SKIPPED") continue;
@@ -228,7 +237,7 @@ export async function POST(req: NextRequest) {
             responseBody: r.body,
             requestBody: r.requestBody,
           });
-          if (!r.ok && r.retryable) retryOpenAI = true;
+          if (!r.ok && r.retryable) retry = true;
         }
       }
 
@@ -308,6 +317,7 @@ export async function POST(req: NextRequest) {
               responseBody: r.body,
               requestBody: r.requestBody,
             });
+            if (!r.ok && isTransientStatus(r.status)) retry = true;
           }
         }
       }
@@ -343,6 +353,9 @@ export async function POST(req: NextRequest) {
                 : r.body,
               requestBody: r.requestBody,
             });
+            // A rejected conversion (for example an unknown gclid) comes back as HTTP 200 with a
+            // partial failure, so only an outage or rate limit is retried.
+            if (!r.ok && isTransientStatus(r.status)) retry = true;
           }
         }
       }
@@ -390,11 +403,14 @@ export async function POST(req: NextRequest) {
           : e instanceof Error
             ? e.message
             : "Unknown error";
-      if (d.platform === "OPENAI") retryOpenAI = true;
+      if (RETRIED_PLATFORMS.has(d.platform)) retry = true;
       await mark({ status: "FAILED", responseBody: message });
     }
   }
 
-  // QStash retries only unsuccessful HTTP responses. Completed platforms are skipped above.
-  return NextResponse.json({ ok: !retryOpenAI }, { status: retryOpenAI ? 503 : 200 });
+  // QStash retries only unsuccessful HTTP responses. A retry skips platforms that succeeded or
+  // were skipped and tries every FAILED one again. Google dedupes on order_id and Meta and
+  // TikTok on the event ID; a HubSpot event has no idempotency key, so a HubSpot 5xx that was in
+  // fact recorded would be recorded twice.
+  return NextResponse.json({ ok: !retry }, { status: retry ? 503 : 200 });
 }
