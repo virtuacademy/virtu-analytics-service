@@ -238,8 +238,9 @@ The existing QStash worker sends the deliveries.
   only for visitors who accepted. Gating the capture and the Google upload on Termly advertising
   consent is planned for v2, on both sites at once.
 - **HubSpot:** sends the same `HUBSPOT_EVENT_NAMES` event as Acuity, with
-  `source_system = "opus"`, and the snapshot's `hubspotutk` as `utk` when the booking was linked
-  to an ingest row. Acuity events keep `HUBSPOT_SOURCE_SYSTEM`.
+  `source_system = "opus"`, and the snapshot's `hubspotutk` as `utk` when it has one: the
+  linked ingest row's, or else the cookie Opus read at booking. Acuity events keep
+  `HUBSPOT_SOURCE_SYSTEM`.
 - **IP address:** a linked booking's snapshot carries the ingest `sessionId`, so the worker
   sends that session's first IP and user agent (the landing visit), as for Acuity. An unlinked
   booking sends the booking request's.
