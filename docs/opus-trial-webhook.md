@@ -120,7 +120,9 @@ of a captured request; resends re-sign with a fresh timestamp.
     "firstTouchAt": "2026-11-04T18:01:44.000Z",
     "lastTouchAt": "2026-11-04T18:01:44.000Z",
     "utm": { "source": "google", "medium": "cpc", "campaign": "trial", "term": null, "content": null },
-    "click": { "gclid": "Cj0…", "gbraid": null, "wbraid": null, "fbclid": null, "ttclid": null, "msclkid": null }
+    "click": { "gclid": "Cj0…", "gbraid": null, "wbraid": null, "fbclid": null, "ttclid": null, "msclkid": null,
+               "fbp": "fb.1.1730000000000.1234567890", "fbc": null, "ttp": null },
+    "hubspotutk": "0123456789abcdef0123456789abcdef"
   },
   "flags": { "staffInitiated": false }
 }
@@ -150,6 +152,14 @@ of a captured request; resends re-sign with a fresh timestamp.
   - Each `click` ID is the latest one for its platform, from whichever visit brought it, dropped
     once it is more than 90 days older than the booking. An ad click followed by a newsletter
     visit therefore sends the ad's gclid with the newsletter's UTMs.
+  - `click.gclid` is the newer of that capture and the `_gcl_aw` cookie that Google's Conversion
+    Linker (GTM, all pages of both sites) stores on `.fortelessons.com`, so a visitor who
+    reached the app through a link that no longer carried the gclid still has it.
+  - `click.fbp`, `click.fbc`, `click.ttp` and `hubspotutk` are the `_fbp`, `_fbc` (Meta
+    pixel), `_ttp` (TikTok pixel) and `hubspotutk` (HubSpot tracking script, after consent)
+    cookies at booking, read by Opus's server and validated. They are stored for later Meta and
+    TikTok delivery; `hubspotutk` already goes to HubSpot as the event's `utk`. Staff bookings
+    send none of them.
   - `firstTouchAt` is the first such visit.
   - `landingUrl` and `referrer` are origin and path only; click IDs and UTMs travel only in
     `click` and `utm`.
@@ -203,8 +213,9 @@ One transaction writes:
     `fbclid`, `ttclid`, `msclkid`), `fbp`, `fbc`, `ttp`, `hubspotutk`, first and last URL,
     referrer and touch time, `visitorId` and `sessionId` comes from the ingest row; the event's
     `attribution` fills only the fields the ingest row lacks.
-  - Without one, every field comes from the event's `attribution`, touch times default to
-    `occurredAt`, and `fbp`, `fbc`, `ttp`, `hubspotutk`, `visitorId` and `sessionId` are null.
+  - Without one, every field comes from the event's `attribution` (including `fbp`, `fbc`,
+    `ttp` and `hubspotutk`), touch times default to `occurredAt`, and `dclid`, `visitorId` and
+    `sessionId` are null.
   - `ipAddress` and `userAgent` always come from `client` (the booking request).
 - `CanonicalEvent` `TRIAL_BOOKED` with `eventTime = occurredAt` and `value = valueCents / 100`.
 - `Delivery` rows for `GOOGLE_ADS` and `HUBSPOT` only. A platform not listed in

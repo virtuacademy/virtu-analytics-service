@@ -402,6 +402,40 @@ test("a known vaAttrib freezes the ingest row, with the event filling only its g
   assert.equal(w.rows("canonicalEvent")[0].attributionTok, "opus_lesson-1");
 });
 
+test("Meta, TikTok and HubSpot browser IDs from Opus fill what the ingest row lacks", async () => {
+  const fromOpus = {
+    fbp: "fb.1.1730000000000.999",
+    fbc: "fb.1.1730000000000.IwAR-opus",
+    ttp: "ttp-opus",
+  };
+  const withBrowserIds = (vaAttrib) =>
+    payload({
+      attribution: {
+        vaAttrib,
+        hubspotutk: "utk-opus",
+        click: { ...payload().attribution.click, ...fromOpus },
+      },
+    });
+
+  // Without a marketing-site visit, the booking's own cookies are stored.
+  const alone = webhook();
+  assert.equal((await alone.send(withBrowserIds(undefined))).status, 200);
+  const [own] = alone.rows("attribution");
+  assert.equal(own.fbp, fromOpus.fbp);
+  assert.equal(own.fbc, fromOpus.fbc);
+  assert.equal(own.ttp, fromOpus.ttp);
+  assert.equal(own.hubspotutk, "utk-opus");
+
+  // With one, the visit's values win and Opus fills only the gaps (the visit has no _fbc).
+  const linked = webhook({ ingestRows: { [INGEST_TOKEN]: ingestRow } });
+  assert.equal((await linked.send(withBrowserIds(INGEST_TOKEN))).status, 200);
+  const [snapshot] = linked.rows("attribution");
+  assert.equal(snapshot.fbp, ingestRow.fbp);
+  assert.equal(snapshot.ttp, ingestRow.ttp);
+  assert.equal(snapshot.hubspotutk, ingestRow.hubspotutk);
+  assert.equal(snapshot.fbc, fromOpus.fbc);
+});
+
 test("a missing, malformed or unknown vaAttrib behaves exactly as without one", async () => {
   const baseline = webhook();
   await baseline.send(payload());

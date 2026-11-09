@@ -85,7 +85,13 @@ const payloadSchema = z
         fbclid: shortText(),
         ttclid: shortText(),
         msclkid: shortText(),
+        // The `_fbp`, `_fbc` and `_ttp` cookies, named as in the ingest contract.
+        fbp: shortText(),
+        fbc: shortText(),
+        ttp: shortText(),
       }),
+      // The `hubspotutk` cookie, set only after the visitor consents to HubSpot tracking.
+      hubspotutk: shortText(),
     }),
     flags: z.object({ staffInitiated: z.boolean() }),
   })
@@ -163,12 +169,12 @@ function attributionSnapshot(
     wbraid: ingest?.wbraid ?? event.click.wbraid,
     dclid: ingest?.dclid ?? null,
     fbclid: ingest?.fbclid ?? event.click.fbclid,
-    fbp: ingest?.fbp ?? null,
-    fbc: ingest?.fbc ?? null,
+    fbp: ingest?.fbp ?? event.click.fbp,
+    fbc: ingest?.fbc ?? event.click.fbc,
     ttclid: ingest?.ttclid ?? event.click.ttclid,
-    ttp: ingest?.ttp ?? null,
+    ttp: ingest?.ttp ?? event.click.ttp,
     msclkid: ingest?.msclkid ?? event.click.msclkid,
-    hubspotutk: ingest?.hubspotutk ?? null,
+    hubspotutk: ingest?.hubspotutk ?? event.hubspotutk,
     visitorId: ingest?.visitorId ?? null,
     sessionId: ingest?.sessionId ?? null,
   };
