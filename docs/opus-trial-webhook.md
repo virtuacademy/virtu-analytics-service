@@ -14,10 +14,11 @@ Opus attribution works the way Acuity's does: the visit is captured by `/api/att
 when it happens, and only a token travels to the booking.
 
 1. **Marketing site ingest.** Every page view on www.fortelessons.com calls
-   `POST /api/attrib/ingest`, as virtu.academy's inline script does. This service's own cookies
-   never reach another site (they are `SameSite=Lax` on `.virtu.academy`), so the marketing site
-   stores the returned IDs in first-party cookies on `.fortelessons.com` and sends them back on
-   the next call. That request and response, below, are the contract the marketing site follows.
+   `POST https://attrib.fortelessons.com/api/attrib/ingest`, as virtu.academy's inline script
+   calls attrib.virtu.academy. `attrib.fortelessons.com` is this service under a fortelessons.com
+   name, so the request is first-party to fortelessons.com and the service's response sets its
+   `va_*` cookies on `.fortelessons.com` itself. Server-set cookies outlast Safari's 7-day limit
+   on cookies written by page scripts. The request and response below are the contract.
 2. **The token reaches Opus.** app.fortelessons.com shares `.fortelessons.com`, so the Opus
    server reads the `va_attrib` cookie when the trial is booked.
 3. **Opus sends the token** as `attribution.vaAttrib` in `trial.booked`.
@@ -37,9 +38,11 @@ own first-party cookie when the visitor arrives.
 
 ### Ingest contract for the marketing site
 
-`POST /api/attrib/ingest` with `content-type: application/json`, from an origin listed in
-`ALLOWED_ORIGINS` (`https://www.fortelessons.com`, `https://fortelessons.com`). Send it without
-credentials (`credentials: "omit"`); no cookie of this service is involved.
+`POST https://attrib.fortelessons.com/api/attrib/ingest` with `content-type: application/json`
+and `credentials: "include"`, from an origin listed in `ALLOWED_ORIGINS`
+(`https://www.fortelessons.com`, `https://fortelessons.com`). The browser then sends the
+`va_vid`, `va_sid` and `va_attrib` cookies this service set earlier, and stores the new ones from
+the response. The marketing site writes no cookie itself.
 
 ```json
 {
@@ -47,33 +50,34 @@ credentials (`credentials: "omit"`); no cookie of this service is involved.
   "referrer": "https://www.google.com/",
   "utm": { "utm_source": "google", "utm_medium": "cpc", "utm_campaign": "trial", "utm_term": null, "utm_content": null },
   "click": { "gclid": "Cj0…", "gbraid": null, "wbraid": null, "dclid": null, "fbclid": null, "ttclid": null, "msclkid": null, "fbp": null, "fbc": null, "ttp": null },
-  "hubspotutk": null,
-  "vid": "<va_vid cookie, if set>",
-  "sid": "<va_sid cookie, if set>",
-  "attribTok": "<va_attrib cookie, if set>"
+  "hubspotutk": null
 }
 ```
+
+On fortelessons.com the service never creates an advertising cookie: it does not invent `_fbp`
+or write `_fbc` (it still stores an `fbc` built from `fbclid`). The marketing site allows no
+advertising cookie before consent, and the Meta pixel sets its own once consent is given.
 
 - `url` is the full page URL including its query string. It is stored as is and not parsed, so
   UTMs and click IDs must also be sent in `utm` and `click`. `referrer` is
   `document.referrer` or `null`.
 - `click.fbp`, `click.fbc`, `click.ttp` and `hubspotutk` are the `_fbp`, `_fbc`, `_ttp` and
   `hubspotutk` cookies when present.
-- `vid`, `sid` and `attribTok` are the values from the previous response. Each is used only if
-  it is a UUID; anything else (including `opus_…`) gets a fresh ID. Omit them on the first visit.
 - Each UTM field and click ID keeps its latest non-empty value across calls with the same
-  `attribTok`; the first URL, referrer and touch time are kept, the last ones replaced.
+  `va_attrib`; the first URL, referrer and touch time are kept, the last ones replaced.
+- Body `vid`, `sid` and `attribTok` are still accepted when the matching cookie is missing (a
+  site that cannot use credentials), but the marketing site does not need them.
 
-Response: `{ "ok": true, "vid", "sid", "attribTok", "cookieDomain" }`. Store, on
-`.fortelessons.com` with `Path=/`, `Secure`, `SameSite=Lax`, readable by JavaScript:
+Response: `{ "ok": true, "vid", "sid", "attribTok", "cookieDomain": ".fortelessons.com" }`, with
+these cookies set on `.fortelessons.com` (`Path=/`, `Secure`, `SameSite=Lax`):
 
-| Cookie | Value | Max age |
+| Cookie | Readable by JavaScript | Max age |
 | --- | --- | --- |
-| `va_attrib` | `attribTok` | 90 days |
-| `va_vid` | `vid` | 90 days |
-| `va_sid` | `sid` | 30 days (the service starts a new session after 30 idle minutes regardless) |
+| `va_attrib` | yes (the Opus server reads it; page scripts may) | 90 days |
+| `va_vid` | no | 90 days |
+| `va_sid` | no | 30 days (the service starts a new session after 30 idle minutes regardless) |
 
-Rewrite all three after every response: the service may return new IDs.
+Each response renews all three.
 
 ## Request
 
@@ -268,3 +272,5 @@ platform on, and validate-only off, before the bookings you want delivered.
 | `GOOGLE_ADS_CONVERSION_ACTIONS` | attrib | Add `opus:TRIAL_BOOKED=7889634403`. |
 | `ATTRIB_WEBHOOK_URL` | Opus | Full endpoint URL. Opus sends nothing without it. |
 | `ATTRIB_WEBHOOK_SECRET` | Opus | Same value as `OPUS_WEBHOOK_SECRET`. |
+| `ALLOWED_ORIGINS` | attrib | Add `https://www.fortelessons.com,https://fortelessons.com` for the marketing site's ingest calls. |
+| Domain `attrib.fortelessons.com` | attrib (Vercel project domains) + fortelessons.com DNS | The marketing site's ingest address; requests to it get cookies on `.fortelessons.com`. |

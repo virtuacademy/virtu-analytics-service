@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { randomId } from "@/lib/crypto";
 import { withCors } from "@/lib/cors";
-import { setCookie, setReadableCookie, COOKIE_DOMAIN } from "@/lib/cookies";
+import { setCookie, setReadableCookie, COOKIE_DOMAIN, cookieDomainFor } from "@/lib/cookies";
 import { ingestIdOrNull } from "@/lib/attribToken";
 
 export const runtime = "nodejs";
@@ -57,6 +57,12 @@ export async function POST(req: NextRequest) {
   const origin = req.headers.get("origin");
   const ua = req.headers.get("user-agent") ?? null;
   const ip = getIp(req);
+  // attrib.fortelessons.com sets its cookies on .fortelessons.com, attrib.virtu.academy on
+  // .virtu.academy.
+  const cookieDomain = cookieDomainFor(req.headers.get("host"));
+  // Only virtu.academy lets this service create Meta's _fbp/_fbc cookies. fortelessons.com
+  // allows no advertising cookie before consent; its Meta pixel sets them once consent is given.
+  const mayCreateMetaCookies = cookieDomain === COOKIE_DOMAIN;
 
   let body: IngestBody;
   try {
@@ -130,18 +136,19 @@ export async function POST(req: NextRequest) {
   let setFbpCookie = false;
   let setFbcCookie = false;
 
-  if (!fbp) {
+  if (!fbp && mayCreateMetaCookies) {
     fbp = buildFbp(t.getTime());
     setFbpCookie = true;
-  } else if (!fbpFromCookie) {
-    setFbpCookie = true;
+  } else if (fbp && !fbpFromCookie) {
+    setFbpCookie = mayCreateMetaCookies;
   }
 
   if (!fbc && fbclid) {
+    // Stored either way: Meta accepts fbc built from fbclid. Only virtu.academy gets the cookie.
     fbc = buildFbc(t.getTime(), fbclid);
-    setFbcCookie = true;
+    setFbcCookie = mayCreateMetaCookies;
   } else if (fbc && !fbcFromCookie) {
-    setFbcCookie = true;
+    setFbcCookie = mayCreateMetaCookies;
   }
   const ttclid = normalizeValue(body.click?.ttclid);
   const ttp = normalizeValue(body.click?.ttp);
@@ -222,16 +229,16 @@ export async function POST(req: NextRequest) {
     vid,
     sid,
     attribTok,
-    cookieDomain: COOKIE_DOMAIN,
+    cookieDomain,
   });
-  setCookie(res, "va_vid", vid, 60 * 60 * 24 * 90);
-  setCookie(res, "va_sid", sid, 60 * 60 * 24 * 30);
-  setReadableCookie(res, "va_attrib", attribTok, 60 * 60 * 24 * 90);
+  setCookie(res, "va_vid", vid, 60 * 60 * 24 * 90, cookieDomain);
+  setCookie(res, "va_sid", sid, 60 * 60 * 24 * 30, cookieDomain);
+  setReadableCookie(res, "va_attrib", attribTok, 60 * 60 * 24 * 90, cookieDomain);
   if (setFbpCookie && fbp) {
-    setReadableCookie(res, "_fbp", fbp, META_COOKIE_MAX_AGE_SECONDS);
+    setReadableCookie(res, "_fbp", fbp, META_COOKIE_MAX_AGE_SECONDS, cookieDomain);
   }
   if (setFbcCookie && fbc) {
-    setReadableCookie(res, "_fbc", fbc, META_COOKIE_MAX_AGE_SECONDS);
+    setReadableCookie(res, "_fbc", fbc, META_COOKIE_MAX_AGE_SECONDS, cookieDomain);
   }
 
   return withCors(res, origin);

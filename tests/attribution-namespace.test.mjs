@@ -12,13 +12,21 @@ const nextServer = {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const attribToken = loadTsModule(new URL("../src/lib/attribToken.ts", import.meta.url), {});
+const realCookies = loadTsModule(
+  new URL("../src/lib/cookies.ts", import.meta.url),
+  {},
+  { process: { env: { COOKIE_DOMAIN: ".virtu.academy" } } },
+);
 
 // Runs the real ingest route. `cookies` are attrib's own cookies (only virtu.academy gets
 // them back); `body` carries the IDs another site stored from an earlier response.
-async function ingest({ cookies = {}, body = {} } = {}) {
+async function ingest({ cookies = {}, body = {}, host = "attrib.virtu.academy" } = {}) {
   const visitors = [];
   const sessions = [];
   const attributions = [];
+  // Every cookie the response sets, as { name, domain }.
+  const setCookies = [];
+  const recordCookie = (_res, name, _value, _maxAge, domain) => setCookies.push({ name, domain });
   const recentSession = { lastSeenAt: new Date() };
   const { POST } = loadTsModule(
     new URL("../src/app/api/attrib/ingest/route.ts", import.meta.url),
@@ -26,7 +34,12 @@ async function ingest({ cookies = {}, body = {} } = {}) {
       "next/server": nextServer,
       "@/lib/crypto": { randomId: () => crypto.randomUUID() },
       "@/lib/cors": { withCors: (res) => res },
-      "@/lib/cookies": { setCookie: () => {}, setReadableCookie: () => {}, COOKIE_DOMAIN: "" },
+      "@/lib/cookies": {
+        setCookie: recordCookie,
+        setReadableCookie: recordCookie,
+        COOKIE_DOMAIN: realCookies.COOKIE_DOMAIN,
+        cookieDomainFor: realCookies.cookieDomainFor,
+      },
       "@/lib/attribToken": attribToken,
       "@/lib/prisma": {
         prisma: {
@@ -45,12 +58,36 @@ async function ingest({ cookies = {}, body = {} } = {}) {
     { process: { env: {} } },
   );
   const response = await POST({
-    headers: new Headers({ "user-agent": "Synthetic-Agent" }),
+    headers: new Headers({ "user-agent": "Synthetic-Agent", host }),
     json: async () => ({ url: "https://www.fortelessons.com/trial", ...body }),
     cookies: { get: (name) => (cookies[name] ? { value: cookies[name] } : undefined) },
   });
-  return { vid: visitors[0], sid: sessions[0], token: attributions[0], response };
+  return { vid: visitors[0], sid: sessions[0], token: attributions[0], response, setCookies };
 }
+
+test("attrib.fortelessons.com sets the visit cookies on .fortelessons.com and no Meta cookie", async () => {
+  const { setCookies, response } = await ingest({
+    host: "attrib.fortelessons.com",
+    body: { click: { fbclid: "F-1" } },
+  });
+  assert.deepEqual(setCookies.map((c) => `${c.name}@${c.domain}`).sort(), [
+    "va_attrib@.fortelessons.com",
+    "va_sid@.fortelessons.com",
+    "va_vid@.fortelessons.com",
+  ]);
+  assert.equal(response.body.cookieDomain, ".fortelessons.com");
+});
+
+test("attrib.virtu.academy keeps its cookies, Meta's included, on .virtu.academy", async () => {
+  const { setCookies } = await ingest({ body: { click: { fbclid: "F-1" } } });
+  assert.deepEqual(setCookies.map((c) => `${c.name}@${c.domain}`).sort(), [
+    "_fbc@.virtu.academy",
+    "_fbp@.virtu.academy",
+    "va_attrib@.virtu.academy",
+    "va_sid@.virtu.academy",
+    "va_vid@.virtu.academy",
+  ]);
+});
 
 const VID = "12345678-1234-4123-8123-123456789abc";
 const SID = "22345678-1234-4123-8123-123456789abc";
