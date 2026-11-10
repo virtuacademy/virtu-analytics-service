@@ -237,6 +237,12 @@ The existing QStash worker sends the deliveries.
   script loads only after Termly consent, so `hubspotutk` (and the `utk` sent to HubSpot) exists
   only for visitors who accepted. Gating the capture and the Google upload on Termly advertising
   consent is planned for v2, on both sites at once.
+- **No Meta cookie on lessons.virtu.academy:** that page (the paid-ads trial page) shows the
+  Termly banner, and Opus trials are not sent to Meta. So for a request whose `Origin` is
+  `https://lessons.virtu.academy`, `/api/attrib/ingest` does not invent `_fbp` and sets neither
+  `_fbp` nor `_fbc`. It still stores Meta IDs the visitor already has, and an `fbc` built from
+  `fbclid`. Other virtu.academy pages are unchanged. Meta's cookies return there with
+  consent-gated Meta tracking (v2).
 - **HubSpot:** sends the same `HUBSPOT_EVENT_NAMES` event as Acuity, with
   `source_system = "opus"`, and the snapshot's `hubspotutk` as `utk` when it has one: the
   linked ingest row's, or else the cookie Opus read at booking. Acuity events keep

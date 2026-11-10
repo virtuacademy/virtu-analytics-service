@@ -40,6 +40,7 @@ Opus (app.fortelessons.com) books trial lessons without Acuity and cannot read `
 - `value` is Acuity `amountPaid` (if present) and `currency` is `USD`.
 - Deliveries are queued only when `QSTASH_TOKEN` is set; `/api/qstash/deliver` also requires the QStash signing keys.
 - `_fbp` is synthesized and set as a first-party cookie when missing; `_fbc` is synthesized only when missing *and* `fbclid` is present (otherwise it remains unset).
+- Exception: a request from `https://lessons.virtu.academy` never gets a `_fbp` or `_fbc` cookie, and no `_fbp` is invented for it. Meta IDs the visitor already has, and an `fbc` built from `fbclid`, are still stored. See "Consent (v1)" in `docs/opus-trial-webhook.md`.
 - Google Ads consent is currently hard-coded to `GRANTED` for both `adUserData` and `adPersonalization`; `GOOGLE_ADS_AD_USER_DATA_CONSENT` and `GOOGLE_ADS_AD_PERSONALIZATION_CONSENT` in `.env.example` are not read by the code yet.
 
 ## What data we capture and why
