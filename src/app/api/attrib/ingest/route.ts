@@ -39,6 +39,11 @@ function normalizeValue(value?: string | null) {
 const SESSION_WINDOW_MS = 30 * 60 * 1000;
 const META_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 90;
 
+// Pages that get no Meta cookie from this service. lessons.virtu.academy (the paid-ads trial
+// page) shows a consent banner, and nothing is sent to Meta for Opus trials yet. Remove it from
+// this list when consent-gated Meta tracking ships (v2).
+const NO_META_COOKIE_ORIGINS = new Set(["https://lessons.virtu.academy"]);
+
 function buildFbp(createdAtMs: number): string {
   const random = Math.floor(1000000000 + Math.random() * 9000000000);
   return `fb.1.${createdAtMs}.${random}`;
@@ -57,6 +62,7 @@ export async function POST(req: NextRequest) {
   const origin = req.headers.get("origin");
   const ua = req.headers.get("user-agent") ?? null;
   const ip = getIp(req);
+  const mayCreateMetaCookies = !NO_META_COOKIE_ORIGINS.has(origin ?? "");
 
   let body: IngestBody;
   try {
@@ -130,18 +136,19 @@ export async function POST(req: NextRequest) {
   let setFbpCookie = false;
   let setFbcCookie = false;
 
-  if (!fbp) {
+  if (!fbp && mayCreateMetaCookies) {
     fbp = buildFbp(t.getTime());
     setFbpCookie = true;
-  } else if (!fbpFromCookie) {
-    setFbpCookie = true;
+  } else if (fbp && !fbpFromCookie) {
+    setFbpCookie = mayCreateMetaCookies;
   }
 
   if (!fbc && fbclid) {
+    // Stored either way: Meta accepts an fbc built from fbclid. Only the cookie is withheld.
     fbc = buildFbc(t.getTime(), fbclid);
-    setFbcCookie = true;
+    setFbcCookie = mayCreateMetaCookies;
   } else if (fbc && !fbcFromCookie) {
-    setFbcCookie = true;
+    setFbcCookie = mayCreateMetaCookies;
   }
   const ttclid = normalizeValue(body.click?.ttclid);
   const ttp = normalizeValue(body.click?.ttp);
