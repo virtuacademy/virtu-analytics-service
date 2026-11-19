@@ -268,6 +268,7 @@ export async function POST(req: NextRequest) {
               utm_source: attrib?.utmSource ?? null,
               utm_medium: attrib?.utmMedium ?? null,
             },
+            source,
           });
 
           if (r.skipped) {

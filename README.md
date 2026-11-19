@@ -7,7 +7,7 @@ Analytics and conversion tracking service for Virtu. Captures attribution from W
 - Issues first-party visitor/session IDs and attribution tokens
 - Captures UTMs, click IDs, and platform cookies (`_fbp`, `_fbc`, `_ttp`, `hubspotutk`)
 - Processes Acuity "changed" webhooks into canonical events
-- Records Opus trial bookings (signed `trial.booked` webhook) and delivers them to Google Ads and HubSpot only ([contract](docs/opus-trial-webhook.md))
+- Records Opus trial bookings (signed `trial.booked` webhook) and delivers them to Google Ads and HubSpot, and to Meta for visitors who came through a virtu.academy page; no other platform ([contract](docs/opus-trial-webhook.md))
 - Sends conversions via QStash to Meta, Google Ads, HubSpot, TikTok, and ChatGPT Ads (OpenAI; disabled until configured)
 - Provides a small dashboard and GraphQL debug endpoint (protected when `AUTH_PASSWORD` is set)
 
@@ -60,7 +60,7 @@ Key env vars (see `.env.example` for the full list):
 - QStash: `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`
 - Meta: `META_PIXEL_ID`, `META_CAPI_ACCESS_TOKEN`, `META_CAPI_EVENT_NAME(S)`, optional `META_CAPI_TEST_EVENT_CODE`, `META_CAPI_API_VERSION`, `META_CAPI_LDU_ENABLED`, `META_CAPI_PREDICTED_LTV`
 - HubSpot: `HUBSPOT_PRIVATE_APP_TOKEN`, `HUBSPOT_EVENT_NAMES`, optional `HUBSPOT_SOURCE_SYSTEM`
-- Opus: `OPUS_WEBHOOK_SECRET`, `OPUS_DELIVERY_PLATFORMS` (empty records without delivering), plus an `opus:TRIAL_BOOKED=<id>` entry in `GOOGLE_ADS_CONVERSION_ACTIONS`
+- Opus: `OPUS_WEBHOOK_SECRET`, `OPUS_DELIVERY_PLATFORMS` (empty records without delivering), plus an `opus:TRIAL_BOOKED=<id>` entry in `GOOGLE_ADS_CONVERSION_ACTIONS` and an `opus:TRIAL_BOOKED=<Meta event name>` entry in `META_CAPI_EVENT_NAMES`
 - Google Ads: `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_CLIENT_ID`, `GOOGLE_ADS_CLIENT_SECRET`, `GOOGLE_ADS_REFRESH_TOKEN`, `GOOGLE_ADS_CUSTOMER_ID`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID`, `GOOGLE_ADS_CONVERSION_ACTION_ID(S)`, `GOOGLE_ADS_DEFAULT_PHONE_COUNTRY_CODE`, timezone settings, optional `GOOGLE_ADS_VALIDATE_ONLY`/`GOOGLE_ADS_JOB_ID`, consent settings (`GOOGLE_ADS_AD_USER_DATA_CONSENT`, `GOOGLE_ADS_AD_PERSONALIZATION_CONSENT`, currently ignored by code)
 - TikTok: `TIKTOK_PIXEL_ID`, `TIKTOK_ACCESS_TOKEN`, optional `TIKTOK_EVENT_ACTIONS`, `TIKTOK_TEST_EVENT_CODE`, `TIKTOK_DEFAULT_PHONE_COUNTRY_CODE`
 - Optional: `META_CAPI_TEST_SECRET`, `GOOGLE_ADS_TEST_SECRET`, `HUBSPOT_TEST_SECRET`, and `TIKTOK_TEST_SECRET` for test endpoints

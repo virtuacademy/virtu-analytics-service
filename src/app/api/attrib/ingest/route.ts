@@ -40,8 +40,9 @@ const SESSION_WINDOW_MS = 30 * 60 * 1000;
 const META_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 90;
 
 // Pages that get no Meta cookie from this service. lessons.virtu.academy (the paid-ads trial
-// page) shows a consent banner, and nothing is sent to Meta for Opus trials yet. Remove it from
-// this list when consent-gated Meta tracking ships (v2).
+// page) shows a consent banner. Opus trials booked from it can go to Meta from the server
+// (docs/opus-trial-webhook.md), which needs no cookie. Remove it from this list when
+// consent-gated Meta tracking ships (v2).
 const NO_META_COOKIE_ORIGINS = new Set(["https://lessons.virtu.academy"]);
 
 function buildFbp(createdAtMs: number): string {
