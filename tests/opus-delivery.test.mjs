@@ -167,12 +167,19 @@ test("Opus events reach Meta under their own opus: name and never fall back", as
 });
 
 test("adding an opus: entry leaves Acuity's Meta event names as they were", async () => {
-  for (const eventName of ["TRIAL_BOOKED", "APPOINTMENT_BOOKED"]) {
-    const before = metaCapi();
-    await before.send({ eventId: "123", eventName });
-    const after = metaCapi({ META_CAPI_EVENT_NAMES: "opus:TRIAL_BOOKED=Purchase" });
-    await after.send({ eventId: "123", eventName });
-    assert.equal(after.events[0].event_name, before.events[0].event_name, eventName);
+  // The built-in names Acuity events get when no name is configured for them.
+  for (const [eventName, expected] of [
+    ["TRIAL_BOOKED", "SubmitApplication"],
+    ["APPOINTMENT_BOOKED", "Schedule"],
+    ["TRIAL_CANCELED", "Cancel"],
+  ]) {
+    for (const env of [{}, { META_CAPI_EVENT_NAMES: "opus:TRIAL_BOOKED=Purchase" }]) {
+      for (const source of [undefined, "acuity"]) {
+        const m = metaCapi(env);
+        await m.send({ eventId: "123", eventName, source });
+        assert.equal(m.events[0].event_name, expected, eventName);
+      }
+    }
   }
 });
 
@@ -217,7 +224,7 @@ function worker(options = {}) {
         sessionId: null,
         ipAddress: "203.0.113.7",
         userAgent: "Synthetic-Agent",
-        lastUrl: "https://app.fortelessons.com/teacher/profile/abc",
+        lastUrl: options.lastUrl ?? "https://app.fortelessons.com/teacher/profile/abc",
         gclid: "G-1",
         fbc: options.fbc ?? null,
         hubspotutk: options.hubspotutk ?? null,
@@ -337,24 +344,32 @@ test("a Google or HubSpot outage or rate limit asks QStash to retry; a rejected 
 });
 
 test("Acuity bookings keep the Acuity source, HubSpot source system and session-only IP", async () => {
+  const lastUrl = "https://virtu.academy/schedule?appointmentType=1&fbclid=IwAR-1#pick";
   const w = worker({
     appointmentId: "123",
     extraDeliveries: [{ id: "meta", platform: "META", status: "PENDING" }],
+    lastUrl,
   });
   await w.invoke();
   assert.equal(w.googleCalls[0].source, "acuity");
   assert.equal(w.googleCalls[0].userIpAddress, null);
   assert.equal(w.hubspotCalls[0].sourceSystem, "attrib.virtu.academy");
-  // Meta is not gated by OPUS_DELIVERY_PLATFORMS for Acuity, and resolves Acuity's event name.
+  // Meta is not gated by OPUS_DELIVERY_PLATFORMS for Acuity, resolves Acuity's event name and
+  // gets the page address as stored.
   assert.equal(w.metaCalls[0].source, "acuity");
+  assert.equal(w.metaCalls[0].eventSourceUrl, lastUrl);
   assert.equal(w.statusOf("meta").status, "SUCCESS");
 });
 
 test("an Opus booking reaches Meta as an Opus event once META is enabled", async () => {
-  const w = worker({
+  const enabled = {
     opusPlatforms: "GOOGLE_ADS,HUBSPOT,META",
-    extraDeliveries: [{ id: "meta", platform: "META", status: "PENDING" }],
     fbc: "fb.1.1730000000000.IwAR-1",
+    lastUrl: "https://lessons.virtu.academy/trial?email=parent%40example.com&fbclid=IwAR-1#faq",
+  };
+  const w = worker({
+    ...enabled,
+    extraDeliveries: [{ id: "meta", platform: "META", status: "PENDING" }],
   });
   assert.equal((await w.invoke()).status, 200);
 
@@ -366,7 +381,18 @@ test("an Opus booking reaches Meta as an Opus event once META is enabled", async
   assert.equal(meta.fbc, "fb.1.1730000000000.IwAR-1");
   assert.equal(meta.ip, "203.0.113.7");
   assert.equal(meta.value, 35);
+  // The page address goes without its query string and fragment.
+  assert.equal(meta.eventSourceUrl, "https://lessons.virtu.academy/trial");
   assert.equal(w.statusOf("meta").status, "SUCCESS");
+
+  // A row recorded as SKIPPED (no virtu.academy visit, or META off at booking) is never sent.
+  const skipped = worker({
+    ...enabled,
+    extraDeliveries: [{ id: "meta", platform: "META", status: "SKIPPED" }],
+  });
+  await skipped.invoke();
+  assert.equal(skipped.metaCalls.length, 0);
+  assert.equal(skipped.statusOf("meta"), undefined);
 });
 
 test("an Opus event never reaches Meta while it is off, or any platform outside the Opus list", async () => {

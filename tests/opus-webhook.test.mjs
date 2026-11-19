@@ -525,4 +525,11 @@ test("Meta gets an Opus booking only when its visitor came through a virtu.acade
       assert.match(meta.responseBody, /virtu\.academy visit/, name);
     }
   }
+
+  // A qualifying visit is still not queued for Meta while META is not listed.
+  const off = webhook({ ingestRows: { [INGEST_TOKEN]: visit(trialPage, trialPage) } });
+  assert.equal((await off.send(payload({ attribution: { vaAttrib: INGEST_TOKEN } }))).status, 200);
+  const offMeta = off.rows("delivery")[0].find((d) => d.platform === "META");
+  assert.equal(offMeta.status, "SKIPPED");
+  assert.match(offMeta.responseBody, /OPUS_DELIVERY_PLATFORMS/);
 });

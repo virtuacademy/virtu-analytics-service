@@ -36,6 +36,16 @@ function isTransientStatus(status: number): boolean {
 // network failure) counts as temporary too.
 const RETRIED_PLATFORMS = new Set(["OPENAI", "GOOGLE_ADS", "HUBSPOT"]);
 
+// A page address without its query string or fragment.
+function originAndPath(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return url.split(/[?#]/)[0];
+  }
+}
+
 export async function POST(req: NextRequest) {
   const raw = await req.text();
 
@@ -249,7 +259,10 @@ export async function POST(req: NextRequest) {
             eventId,
             eventName: ce.name,
             eventTime: ce.eventTime,
-            eventSourceUrl,
+            // An Opus booking's page address goes without its query string and fragment: the
+            // click ID and UTMs travel in their own fields, and a landing link can carry
+            // personal details. Acuity sends keep the address as stored.
+            eventSourceUrl: source === "opus" ? originAndPath(eventSourceUrl) : eventSourceUrl,
             email,
             phone,
             firstName: appt?.firstName ?? null,

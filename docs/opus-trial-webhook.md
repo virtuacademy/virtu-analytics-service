@@ -14,6 +14,16 @@ Owners: this service owns the endpoint and the contract; Opus
 Opus attribution works the way Acuity's does: the visit is captured by `/api/attrib/ingest`
 when it happens, and only a token travels to the booking.
 
+Two sites can hand the token to Opus. Only the second does today:
+
+- **www.fortelessons.com**, as in steps 1 and 2 below. It does not report to ingest yet.
+- **lessons.virtu.academy**, the paid-ads trial page. It reports each page view with
+  credentials, so this service sets `va_attrib` on `.virtu.academy` itself. Opus cannot read
+  that domain's cookies, so the page's links into the app carry the token as a `va_attrib`
+  query parameter, and Opus keeps it in its own host-only cookie (90 days; the newest link
+  wins). The links gain the token only once the first page-view report has answered, so a
+  visitor who clicks through sooner arrives without it.
+
 1. **Marketing site ingest.** Every page view on www.fortelessons.com calls
    `POST /api/attrib/ingest`, as virtu.academy's inline script does. This service's own cookies
    never reach another site (they are `SameSite=Lax` on `.virtu.academy`), so the marketing site
@@ -239,29 +249,43 @@ The existing QStash worker sends the deliveries.
   - **Which bookings.** Only a booking linked to a visit that began on virtu.academy:
     `vaAttrib` names a usable ingest row whose first page is on virtu.academy or a subdomain
     (the paid-ads trial page is lessons.virtu.academy). Any other booking's `META` row is
-    written as `SKIPPED`, which keeps Forte customers who never visited a Virtu.Academy page
-    out of Virtu.Academy's Meta dataset. Two limits:
+    written as `SKIPPED`. The aim is to keep Forte customers who never visited a
+    Virtu.Academy page out of Virtu.Academy's Meta dataset. It is a filter, not proof of a
+    visit:
     - A visitor who lands on the page in one browser and books in another is not linked, so
-      that booking is not sent.
+      that booking is not sent. Neither is one who clicks through before the page's links
+      carry the token.
     - The link is the token on the page's links into the app. Someone who opens such a link
       forwarded by another person books under that person's visit, and is sent with it.
+    - The first page is the address the caller reported to ingest. Ingest is a public
+      endpoint and cannot prove a request came from that page.
   - **Event name.** The one mapped as `opus:TRIAL_BOOKED` in `META_CAPI_EVENT_NAMES`, for
     example `TRIAL_BOOKED=<Acuity's name>,opus:TRIAL_BOOKED=Purchase`. Opus events never fall
     back to Acuity's name, `META_CAPI_EVENT_NAME` or a built-in default; without the entry the
-    delivery is `SKIPPED`. An `opus:` entry does not change how Acuity's names are resolved.
-  - **What is sent.** `event_id` = `eventId`, `event_time` = `occurredAt`, `event_source_url` =
-    the visit's last page address with its query string, `value` and `currency`, the SHA-256
-    hashes of the booker's email, phone and first and last name, an IP address and user agent
-    (see "IP address" below), the snapshot's `fbc` and `fbp`, the hash of `eventId` as
-    `external_id`, and as custom data the `eventId` and the visit's `utm_source`, `utm_medium`
-    and `utm_campaign`. The `fbp` is usually the `_fbp` cookie Opus read at booking, because
-    the page sets none. No Meta pixel or Meta cookie is involved on the page.
-  - With `Purchase` as the name, Meta requires a value: a booking whose `valueCents` is `null`
-    is expected to be rejected and recorded as `FAILED`.
-  - A failed Meta delivery does not ask for a retry, as for Acuity. It is tried again only if
-    the same event is redelivered because Google Ads or HubSpot asked for one.
-  - `META_CAPI_TEST_EVENT_CODE` applies to every Meta event of both booking systems. While it
-    is set, Meta counts none of them.
+    delivery is `SKIPPED`. Entries with a `source:` prefix are ignored when Acuity's names are
+    resolved.
+  - **What the event means.** Booked, not paid. A booking is reported whether or not the card
+    was charged (`invoicePaid`), and `value` is the trial's price before any discount code or
+    account credit. Weigh that when the name is `Purchase`. Meta lists `value` and `currency`
+    as required for `Purchase`; its documentation does not say what it does with one that has
+    no value (`valueCents` is `null`).
+  - **What is sent.** `event_id` = `eventId`, `event_time` = `occurredAt`, `action_source` =
+    `website`, `event_source_url` = the visit's last page address without its query string or
+    fragment, `value` and `currency`, the SHA-256 hashes of the booker's email, phone and first
+    and last name, an IP address and user agent (see "IP address" below), the snapshot's `fbc`
+    and `fbp`, and the hash of `eventId` as `external_id`. Custom data: `appointment_id`
+    (the `eventId`), `appointment_type_id` (`null` for Opus) and the visit's `utm_source`,
+    `utm_medium` and `utm_campaign`. `data_processing_options` is empty unless
+    `META_CAPI_LDU_ENABLED` is on. If the name is `StartTrial` and `META_CAPI_PREDICTED_LTV`
+    is set, `predicted_ltv` is added. The `fbp` is usually the `_fbp` cookie Opus read at
+    booking, because the page sets none. No Meta pixel or Meta cookie is involved on the page.
+  - A failed Meta delivery does not ask for a retry, as for Acuity. It is tried again whenever
+    the same queue message is delivered again, for whatever reason.
+  - With `OUTBOUND_MODE=mock`, a `PENDING` row is marked `SUCCESS` without the name being
+    checked or Meta being called.
+  - `META_CAPI_TEST_EVENT_CODE` applies to every Meta event of both booking systems. Meta
+    does not drop such events: its documentation says they "flow into Events Manager and are
+    used for targeting and ads measurement purposes". Leave it empty in production.
 - **Consent (v1):** like Acuity uploads, Opus uploads mark `adUserData` and `adPersonalization`
   as granted. As on virtu.academy, the marketing site's page-view capture (`/api/attrib/ingest`)
   and Opus's own click capture run whatever the visitor chose in Termly, and so do the Google
@@ -299,9 +323,18 @@ The existing QStash worker sends the deliveries.
 A delivery recorded as `SKIPPED` (its platform was off in `OPUS_DELIVERY_PLATFORMS`, Google
 ran in validate-only mode, or Meta had no `opus:TRIAL_BOOKED` name) is never delivered later,
 even after the setting changes. Turn each platform on, and validate-only off, before the
-bookings you want delivered. For Meta, set the `opus:TRIAL_BOOKED` entry in
-`META_CAPI_EVENT_NAMES` before adding `META` to `OPUS_DELIVERY_PLATFORMS`. A booking recorded
-before this service knew `META` as an Opus platform has no `META` row and is never sent.
+bookings you want delivered. A booking recorded before this service knew `META` as an Opus
+platform has no `META` row and is never sent.
+
+For Meta, in this order:
+
+1. Deploy the version that knows `META` as an Opus platform, with no setting changed.
+2. Add the `opus:TRIAL_BOOKED` entry to `META_CAPI_EVENT_NAMES`, keeping every entry already
+   there, and add `META` to `OPUS_DELIVERY_PLATFORMS`, in the same change. Redeploy.
+
+Never give an older version an `opus:` entry: there every entry counts as a mapping, so Acuity
+events that rely on the built-in names stop being sent. And never run with `META` on and no
+`opus:TRIAL_BOOKED` name: the worker records each qualifying booking as `SKIPPED`.
 
 ## Configuration
 
