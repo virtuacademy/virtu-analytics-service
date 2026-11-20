@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { randomId } from "@/lib/crypto";
 import { isAllowedOrigin, withCors } from "@/lib/cors";
-import { clientIp } from "@/lib/clientIp";
+import { addressLimitKey, clientIp } from "@/lib/clientIp";
 import { INGEST_ID_PATTERN } from "@/lib/attribToken";
 import {
   AD_EVENT_DELIVERY_PLATFORMS,
@@ -19,19 +19,22 @@ import { queueDeliveries } from "@/lib/qstash";
 //
 // Nothing here can prove a person sent the request: anyone can call this, a script can send
 // any Origin header, and anyone can get a visit token by loading the page. So the rules below
-// do not try to tell people from scripts. They keep abuse bounded (how many events can reach
-// an ad platform per visit, per address and per day) and visible (every refused event is
-// recorded with its reason). Contract: docs/page-events.md.
+// do not try to tell people from scripts. They limit what one visit and one address can have
+// delivered, record every refused event with its reason, and log a line when the day's volume
+// looks wrong. No rule lets one caller's traffic stop another visitor's event: the way to stop
+// a flood is to take the platforms out of PAGE_DELIVERY_PLATFORMS.
+// Contract: docs/page-events.md.
 
 export const runtime = "nodejs";
 
 const MAX_BODY_CHARACTERS = 2048;
-// The window every limit below counts in.
+// The window every rule below counts in.
 const WINDOW_MS = 24 * 60 * 60 * 1000;
-// Delivered page events allowed in that window, from one IP address and from everyone
-// together. Real volume is a handful a week. 0 delivers none.
+// Page events one address may have delivered in that window.
 const DEFAULT_DAILY_LIMIT_PER_IP = 3;
-const DEFAULT_DAILY_LIMIT = 25;
+// Page events in that window, from everyone, beyond which an error is logged. Real volume is a
+// handful a week.
+const DEFAULT_DAILY_ALERT_THRESHOLD = 25;
 
 const EVENT_NAMES = { "callback.requested": "CALLBACK_REQUESTED" } as const;
 const PAGE_EVENT_NAMES = Object.values(EVENT_NAMES);
@@ -53,10 +56,11 @@ const bodySchema = z.object({
     .transform((contact) => contact ?? { email: null, phone: null, firstName: null }),
 });
 
-function dailyLimit(value: string | undefined, fallback: number): number {
+// A whole number of events from a setting; unset or unreadable means the default.
+function countSetting(value: string | undefined, fallback: number): number {
   const trimmed = value?.trim();
-  const limit = trimmed ? Number(trimmed) : Number.NaN;
-  return Number.isInteger(limit) && limit >= 0 ? limit : fallback;
+  const count = trimmed ? Number(trimmed) : Number.NaN;
+  return Number.isInteger(count) && count >= 0 ? count : fallback;
 }
 
 export async function OPTIONS(req: NextRequest) {
@@ -92,21 +96,19 @@ export async function POST(req: NextRequest) {
 
   const now = new Date();
   const since = new Date(now.getTime() - WINDOW_MS);
-  // Taken as ingest takes it. Requests with no address share one allowance.
-  const ipAddress = clientIp(req.headers)?.slice(0, 64) || null;
-  const limitPerIp = dailyLimit(
+  // The caller's address as ingest takes it, counted per IPv4 address and per IPv6 /64.
+  // Requests with no address share one allowance.
+  const address = addressLimitKey(clientIp(req.headers));
+  const limitPerIp = countSetting(
     process.env.PAGE_EVENT_DAILY_LIMIT_PER_IP,
     DEFAULT_DAILY_LIMIT_PER_IP,
   );
-  const limit = dailyLimit(process.env.PAGE_EVENT_DAILY_LIMIT, DEFAULT_DAILY_LIMIT);
   const eventId = `${PAGE_EVENT_ID_PREFIX}callback_${randomId()}`;
   const value = configuredEventValue("page", name);
   const enabled = enabledDeliveryPlatforms(process.env.PAGE_DELIVERY_PLATFORMS);
   const googleNotBefore = googleAdsNotBefore(visit.lastTouchAt, now, now);
-  // An event counts against the limits once any of its deliveries was accepted for sending.
-  const accepted = { deliveries: { some: { status: { not: "SKIPPED" as const } } } };
 
-  let recorded: { canonicalEventId: string; queue: boolean; limitReached: string | null };
+  let recorded: { canonicalEventId: string; queue: boolean; recordedInWindow: number };
   try {
     recorded = await prisma.$transaction(async (tx) => {
       // Page events are checked and recorded one at a time, so no two requests can both slip
@@ -117,16 +119,24 @@ export async function POST(req: NextRequest) {
         where: { vaAttrib: attribTok, canonicalEvent: { name, eventTime: { gt: since } } },
         select: { canonicalEventId: true },
       });
+      // This address's events that were accepted for delivery: a refused one does not count.
       const fromThisAddress = await tx.eventContact.count({
-        where: { ipAddress, canonicalEvent: { name, eventTime: { gt: since }, ...accepted } },
+        where: {
+          ipAddress: address,
+          canonicalEvent: {
+            name,
+            eventTime: { gt: since },
+            deliveries: { some: { status: { not: "SKIPPED" } } },
+          },
+        },
       });
       const fromEveryone = await tx.canonicalEvent.count({
-        where: { name: { in: PAGE_EVENT_NAMES }, eventTime: { gt: since }, ...accepted },
+        where: { name: { in: PAGE_EVENT_NAMES }, eventTime: { gt: since } },
       });
 
-      // Why this event is recorded but delivered nowhere, if it is.
+      // Why this event is recorded but delivered nowhere, if it is. Each reason is about
+      // this visit or this address; nothing other visitors do can refuse an event.
       let refusal: string | null = null;
-      let limitReached: string | null = null;
       if (earlier) {
         refusal = "Duplicate: this visit already reported this event in the last 24 hours";
       } else if (now.getTime() - visit.lastTouchAt.getTime() > WINDOW_MS) {
@@ -134,11 +144,7 @@ export async function POST(req: NextRequest) {
       } else if (hasNothingToMatch(visit, contact)) {
         refusal = "No click ID and no contact details to match this event with";
       } else if (fromThisAddress >= limitPerIp) {
-        limitReached = "PAGE_EVENT_DAILY_LIMIT_PER_IP";
-        refusal = `Limit reached: ${limitPerIp} delivered page events from one IP address in 24 hours (PAGE_EVENT_DAILY_LIMIT_PER_IP)`;
-      } else if (fromEveryone >= limit) {
-        limitReached = "PAGE_EVENT_DAILY_LIMIT";
-        refusal = `Limit reached: ${limit} delivered page events in 24 hours (PAGE_EVENT_DAILY_LIMIT)`;
+        refusal = `Limit reached: ${limitPerIp} delivered page events from one address in 24 hours (PAGE_EVENT_DAILY_LIMIT_PER_IP)`;
       }
 
       // The visit frozen as it stands now, so later page views cannot change this conversion.
@@ -162,7 +168,7 @@ export async function POST(req: NextRequest) {
           phone: contact.phone,
           firstName: contact.firstName,
           vaAttrib: attribTok,
-          ipAddress,
+          ipAddress: address,
         },
       });
 
@@ -194,8 +200,7 @@ export async function POST(req: NextRequest) {
       return {
         canonicalEventId: canonicalEvent.id,
         queue: deliveries.some((delivery) => delivery.status === "PENDING"),
-        // Only worth a log line when the limit is what kept a switched-on platform from it.
-        limitReached: enabled.size > 0 ? limitReached : null,
+        recordedInWindow: fromEveryone + 1,
       };
     });
   } catch (error) {
@@ -205,12 +210,16 @@ export async function POST(req: NextRequest) {
     return answer({ ok: false, error: "Database error" }, 500);
   }
 
-  if (recorded.limitReached) {
-    // The line monitoring looks for: either someone is abusing the endpoint, or real volume
-    // has outgrown the limit and the setting needs raising.
+  // An alarm, not a limit: this event is delivered like any other. A shared limit would let a
+  // few forged requests a day stop every real callback, and a skipped delivery is never sent
+  // later.
+  const alertThreshold = countSetting(
+    process.env.PAGE_EVENT_DAILY_ALERT_THRESHOLD,
+    DEFAULT_DAILY_ALERT_THRESHOLD,
+  );
+  if (recorded.recordedInWindow > alertThreshold) {
     console.error(
-      `[page-events] limit reached (${recorded.limitReached}): event recorded, not delivered`,
-      { canonicalEventId: recorded.canonicalEventId, event: name },
+      `[page-events] ${recorded.recordedInWindow} page events in 24 hours, over PAGE_EVENT_DAILY_ALERT_THRESHOLD (${alertThreshold}). Still delivering. If this is a flood, remove the platforms from PAGE_DELIVERY_PLATFORMS.`,
     );
   }
 

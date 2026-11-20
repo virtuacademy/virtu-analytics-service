@@ -37,36 +37,58 @@ the visitor its outcome.
 
 | Status | Body | Meaning |
 | --- | --- | --- |
-| 200 | `{ "ok": true }` | Recorded. Also the answer for a duplicate (see below) |
+| 200 | `{ "ok": true }` | Recorded. Also the answer when the event is recorded but will not be delivered (see below) |
 | 400 | `{ "ok": false, "error" }` | Not JSON, or a body outside the contract |
 | 403 | `{ "ok": false, "error" }` | The `Origin` header is missing or not in `ALLOWED_ORIGINS` |
 | 404 | `{ "ok": false, "error" }` | No visit has this token |
 | 413 | `{ "ok": false, "error" }` | Body over 2048 characters |
 | 500 | `{ "ok": false, "error" }` | Database error |
 
-An answer never repeats anything the caller sent and carries no ID.
+An answer never repeats anything the caller sent, carries no ID, and does not say whether the
+event will be delivered.
 
-## Rules that keep it from minting conversions
+## What bounds abuse
 
-The endpoint is public: anyone can post to it, and a script can send any `Origin` header. So:
+Nothing here can prove a person sent the request. Anyone can call the endpoint, a script can
+send any `Origin` header, and anyone can get a visit token by loading the page. So the rules do
+not try to tell people from scripts. They bound how many events can reach an ad platform, and
+they leave a record of every event that was refused.
 
-- **A real visit.** The token must name a visit recorded by `/api/attrib/ingest`. Tokens of
-  other events (`opus_…`, `page_…`) are not UUIDs and are refused.
-- **One per visit per 24 hours.** A second `callback.requested` for the same token within 24
-  hours of an earlier one is recorded with every delivery `SKIPPED` as a duplicate and is never
-  delivered. Requests for one token are taken in turn (a row lock on the visit), so two posts at
-  the same moment cannot both count. Any earlier event counts, a duplicate included, so repeated
-  posts keep the window open.
-- **Something to match.** An event whose visit has no ad click ID and that carries neither an
-  email nor a phone number is recorded and never delivered.
-- **Only a browser on a listed site.** A request whose `Origin` is not in `ALLOWED_ORIGINS` is
-  refused. This stops other websites, not scripts.
+An event is **recorded but delivered nowhere** (every delivery `SKIPPED` with the reason) when:
 
-What remains possible: someone who loads the page gets a real token and can post one made-up
-callback for it per day. Google Ads counts it only if it matches one of the account's ad
-clicks, by click ID or by the hashed email or phone. The HubSpot form the event sits beside is
-just as public. There is no per-IP rate limit, and every request, duplicates included, writes
-rows.
+- **Duplicate.** The same visit already reported this event in the last 24 hours. Any earlier
+  event counts, a refused one included, so repeated posts keep the window open.
+- **Stale visit.** The visit was last seen more than 24 hours ago. A token harvested earlier
+  stops working.
+- **Nothing to match.** The visit has no ad click ID and the event carries neither an email nor
+  a phone number.
+- **Limit per IP address.** `PAGE_EVENT_DAILY_LIMIT_PER_IP` (default 3) events from the
+  caller's address were already accepted for delivery in the last 24 hours. The address is
+  taken as ingest takes it (first `X-Forwarded-For` entry, else `X-Real-IP`), so it is only as
+  trustworthy as the proxy in front of this service. Requests with no address share one
+  allowance.
+- **Limit for everyone.** `PAGE_EVENT_DAILY_LIMIT` (default 25) page events were already
+  accepted for delivery in the last 24 hours, whoever sent them. Real volume is a handful a
+  week. `0` delivers nothing.
+
+When a limit refuses an event, an error line is logged for monitoring to find:
+`[page-events] limit reached (PAGE_EVENT_DAILY_LIMIT): event recorded, not delivered` (or
+`PAGE_EVENT_DAILY_LIMIT_PER_IP`). It means either abuse or real volume that has outgrown the
+setting.
+
+A request is **refused outright** (nothing written) when its token names no recorded visit
+(tokens of other events, `opus_…` and `page_…`, are not UUIDs), its body is outside the
+contract, or its `Origin` is not listed. The `Origin` check is not a protection: it only keeps
+honest browsers on other sites out.
+
+Page events are checked and recorded one at a time (a database lock held for the transaction),
+so two requests at the same moment cannot both slip under a limit.
+
+**What remains possible.** A script with many IP addresses can still get up to the daily limit
+for everyone delivered per day, each carrying whatever email it typed, which then goes to the
+ad platforms hashed. Google Ads counts such an event only if it matches one of the account's ad
+clicks. Every request that passes validation writes rows, refused events included, and there is
+no limit on that.
 
 ## What gets recorded
 
@@ -77,8 +99,9 @@ One transaction writes:
 - `CanonicalEvent` `CALLBACK_REQUESTED` with `eventTime` = now, no `appointmentId`,
   `attributionTok = eventId`, and `value` from `EVENT_VALUES` (`page:CALLBACK_REQUESTED=<USD>`)
   or none.
-- `EventContact` with the contact fields and `vaAttrib` = the visit token. No `Appointment`
-  is written: the dashboard and HubSpot delivery would read one as a booking.
+- `EventContact` with the contact fields, `vaAttrib` = the visit token and `ipAddress` = the
+  caller's address. No `Appointment` is written: the dashboard and HubSpot delivery would read
+  one as a booking.
 - `Delivery` rows for `GOOGLE_ADS` and `META` only. HubSpot gets nothing from here; the form
   already wrote the contact.
 
@@ -109,6 +132,8 @@ The QStash worker sends the deliveries, as for bookings (see
 | --- | --- |
 | `ALLOWED_ORIGINS` | Must list the page's origin (`https://lessons.virtu.academy`). |
 | `PAGE_DELIVERY_PLATFORMS` | Comma list of `GOOGLE_ADS`, `META`. Empty means record only. |
+| `PAGE_EVENT_DAILY_LIMIT` | Page events delivered per 24 hours, all visitors together. Default 25; `0` delivers none. |
+| `PAGE_EVENT_DAILY_LIMIT_PER_IP` | Page events delivered per 24 hours from one IP address. Default 3. |
 | `GOOGLE_ADS_CONVERSION_ACTIONS` | Add `page:CALLBACK_REQUESTED=<action id>`. |
 | `META_CAPI_EVENT_NAMES` | Add `page:CALLBACK_REQUESTED=<Meta event name>`. |
 | `EVENT_VALUES` | Optional `page:CALLBACK_REQUESTED=<USD amount>`. Without it no value is sent. |

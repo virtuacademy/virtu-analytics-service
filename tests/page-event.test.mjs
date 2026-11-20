@@ -40,7 +40,8 @@ const callback = (overrides = {}) => ({
 });
 
 // `options.earlier` is an event this visit already reported in the window; `fromThisAddress`
-// and `fromEveryone` are how many delivered page events the window already holds.
+// is how many of this address's events were accepted for delivery in it, and `fromEveryone`
+// how many page events it holds in all.
 function endpoint(options = {}) {
   const committed = [];
   const queued = [];
@@ -244,15 +245,11 @@ test("a visit not seen in the last 24 hours cannot report an event that is deliv
   assert.deepEqual(statuses(recent), delivered);
 });
 
-test("one IP address gets a few delivered callbacks a day, and the rest are only recorded", async () => {
+test("one address gets a few delivered callbacks a day, and the rest are only recorded", async () => {
   const before = Date.now();
   const capped = endpoint({ env: on, fromThisAddress: 3 });
   assert.equal((await capped.send(callback())).status, 200);
-  assertNotDelivered(capped, /^Limit reached: 3 .* one IP address .*PAGE_EVENT_DAILY_LIMIT_PER_IP/);
-  assert.match(
-    capped.errors[0][0],
-    /^\[page-events\] limit reached \(PAGE_EVENT_DAILY_LIMIT_PER_IP\)/,
-  );
+  assertNotDelivered(capped, /^Limit reached: 3 .* one address .*PAGE_EVENT_DAILY_LIMIT_PER_IP/);
 
   // Counted: this caller's events of the last 24 hours that were accepted for delivery.
   const where = capped.whereOf("sameAddress");
@@ -280,35 +277,61 @@ test("one IP address gets a few delivered callbacks a day, and the rest are only
   assert.equal(noAddress.rows("eventContact")[0].ipAddress, null);
 });
 
-test("past the daily limit for all visitors, events are recorded, not delivered, and logged", async () => {
-  const tripped = endpoint({ env: on, fromEveryone: 25 });
-  assert.equal((await tripped.send(callback())).status, 200);
-  assertNotDelivered(tripped, /^Limit reached: 25 .*PAGE_EVENT_DAILY_LIMIT\)/);
-  // The line monitoring looks for.
-  assert.equal(tripped.errors.length, 1);
-  assert.match(tripped.errors[0][0], /^\[page-events\] limit reached \(PAGE_EVENT_DAILY_LIMIT\)/);
-  // Nothing of the caller's in the log line.
-  assert.equal(JSON.stringify(tripped.errors).includes("parent@example.com"), false);
+test("IPv6 callers are counted by their /64 network, so one network cannot rotate addresses", async () => {
+  for (const [sent, countedAs] of [
+    ["2001:db8:1:2:aaaa:bbbb:cccc:dddd", "2001:db8:1:2::/64"],
+    // Another address of the same network, written short, in capitals, with a zone.
+    ["2001:DB8:1:2::7%eth0", "2001:db8:1:2::/64"],
+    ["2001:0db8:0001:0002:0000:0000:0000:0001", "2001:db8:1:2::/64"],
+    // A different network.
+    ["2001:db8:1:3::7", "2001:db8:1:3::/64"],
+    ["::1", "0:0:0:0::/64"],
+    // IPv4, also when written as IPv6, stays one address.
+    ["::ffff:203.0.113.7", "203.0.113.7"],
+    ["203.0.113.7", "203.0.113.7"],
+    // Not an address: counted as it was sent.
+    ["2001:db8::1::2", "2001:db8::1::2"],
+  ]) {
+    const e = endpoint({ env: on });
+    await e.send(callback(), PAGE, { "x-forwarded-for": sent });
+    assert.equal(e.whereOf("sameAddress").ipAddress, countedAs, sent);
+    assert.equal(e.rows("eventContact")[0].ipAddress, countedAs, sent);
+  }
+});
 
-  // Counted: every page event of the last 24 hours that was accepted for delivery.
-  const where = tripped.whereOf("everyone");
+test("past the daily alert threshold an error is logged and the event is still delivered", async () => {
+  // The 26th page event of the last 24 hours, whoever sent the others.
+  const busy = endpoint({ env: on, fromEveryone: 25 });
+  assert.equal((await busy.send(callback())).status, 200);
+  // Other visitors' traffic never refuses an event: a shared limit would let a few forged
+  // requests a day stop every real callback.
+  assert.deepEqual(statuses(busy), delivered);
+  assert.deepEqual(busy.queued, ["ce_1"]);
+  // The line monitoring looks for, naming the switch that stops a flood.
+  assert.equal(busy.errors.length, 1);
+  assert.match(busy.errors[0][0], /^\[page-events\] 26 page events in 24 hours/);
+  assert.match(busy.errors[0][0], /PAGE_EVENT_DAILY_ALERT_THRESHOLD \(25\)/);
+  assert.match(busy.errors[0][0], /PAGE_DELIVERY_PLATFORMS/);
+  assert.equal(JSON.stringify(busy.errors).includes("parent@example.com"), false);
+
+  // Counted: every page event of the last 24 hours, refused ones included.
+  const where = busy.whereOf("everyone");
   assert.deepEqual(JSON.parse(JSON.stringify(where.name)), { in: ["CALLBACK_REQUESTED"] });
-  assert.deepEqual(JSON.parse(JSON.stringify(where.deliveries)), {
-    some: { status: { not: "SKIPPED" } },
+  assert.equal(where.deliveries, undefined);
+
+  const quiet = endpoint({ env: on, fromEveryone: 24 });
+  await quiet.send(callback());
+  assert.deepEqual(statuses(quiet), delivered);
+  assert.equal(quiet.errors.length, 0);
+
+  // The setting moves the threshold.
+  const lowered = endpoint({
+    env: { ...on, PAGE_EVENT_DAILY_ALERT_THRESHOLD: "2" },
+    fromEveryone: 2,
   });
-
-  const under = endpoint({ env: on, fromEveryone: 24 });
-  await under.send(callback());
-  assert.deepEqual(statuses(under), delivered);
-  assert.equal(under.errors.length, 0);
-
-  // The setting moves the limit, and 0 delivers nothing at all.
-  const lowered = endpoint({ env: { ...on, PAGE_EVENT_DAILY_LIMIT: "2" }, fromEveryone: 2 });
   await lowered.send(callback());
-  assertNotDelivered(lowered, /^Limit reached: 2 /);
-  const closed = endpoint({ env: { ...on, PAGE_EVENT_DAILY_LIMIT: "0" } });
-  await closed.send(callback());
-  assertNotDelivered(closed, /^Limit reached: 0 /);
+  assert.deepEqual(statuses(lowered), delivered);
+  assert.match(lowered.errors[0][0], /^\[page-events\] 3 page events/);
 });
 
 test("a callback minutes after the ad click holds its Google Ads delivery", async () => {

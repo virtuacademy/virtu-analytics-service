@@ -172,7 +172,8 @@ model EventContact {
   vaAttrib         String?
   // Recorded but never delivered, like a staff-booked appointment.
   staffInitiated   Boolean        @default(false)
-  // The address a page's event was reported from, which its daily limit per address counts.
+  // Where a page's event was reported from, as its daily limit per address counts it: an IPv4
+  // address, or the /64 network of an IPv6 address.
   ipAddress        String?
 
   canonicalEvent   CanonicalEvent @relation(fields: [canonicalEventId], references: [id])

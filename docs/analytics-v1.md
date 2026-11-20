@@ -31,6 +31,10 @@ High-level flow:
 
 Opus (app.fortelessons.com) books trial lessons without Acuity and cannot read `.virtu.academy` cookies. The Forte marketing site (www.fortelessons.com) calls `/api/attrib/ingest` on every page view and keeps the returned IDs in its own `.fortelessons.com` cookies (`va_attrib`, `va_vid`, `va_sid`), sending them back in the ingest body. Opus posts each booking, with that `va_attrib` token and the click IDs and UTMs it captured itself, to the signed `POST /api/webhooks/opus`, which snapshots the visitor's ingest row and uses Opus's capture only for missing fields. The service records it under `opus_<lessonId>` (Appointment, Attribution, `TRIAL_BOOKED` canonical event) and delivers it to Google Ads, HubSpot and Meta; to no other platform. Google Ads uses a separate `opus:TRIAL_BOOKED` conversion action, HubSpot gets `source_system = "opus"`, and Meta uses the event name mapped as `opus:TRIAL_BOOKED` in `META_CAPI_EVENT_NAMES`. `OPUS_DELIVERY_PLATFORMS` switches each platform on; until then deliveries are recorded as `SKIPPED` and are never delivered later, so turn platforms on before the bookings you want delivered. The worker also skips any Opus delivery to a platform that is not enabled when it runs. Full contract: [opus-trial-webhook.md](opus-trial-webhook.md).
 
+### Accounts and callback requests
+
+Two more kinds of event are recorded for Google Ads and Meta only, none of them an appointment. Opus reports each new account through the same signed webhook: `ACCOUNT_CREATED` for a family and `TEACHER_ACCOUNT_CREATED` for a teacher, under `opus_account_<userId>` ([opus-trial-webhook.md](opus-trial-webhook.md#accounts-accountcreated-teacher_accountcreated)). The trial page reports a callback request to the public `POST /api/attrib/event`: `CALLBACK_REQUESTED`, under `page_callback_<uuid>` ([page-events.md](page-events.md)). Each keeps a frozen copy of the visit (`Attribution`) and its contact details on `EventContact` rather than `Appointment`, so the dashboard and HubSpot delivery do not read it as a booking. Each needs its own `source:EVENT` entry in `GOOGLE_ADS_CONVERSION_ACTIONS` and `META_CAPI_EVENT_NAMES` and is skipped, never sent under another action or name, without one. Page events have their own switch (`PAGE_DELIVERY_PLATFORMS`) and daily limits.
+
 ## Current behavior (v1)
 
 - Every non-deduped Acuity `changed` webhook creates a canonical event; duplicates are deduped by `(source, action, id, body hash)`.
@@ -69,10 +73,11 @@ Why this matters:
 
 Public (CORS-protected):
 - `POST /api/attrib/ingest` (also supports `OPTIONS` preflight). Optional body fields `vid`, `sid` and `attribTok` let a site that never receives this service's cookies (www.fortelessons.com) send back the IDs from an earlier response; each is used only when its cookie is missing and only if UUID-shaped, otherwise a fresh ID is issued. A `va_attrib` cookie that is not a UUID is also replaced. See [the ingest contract](opus-trial-webhook.md#ingest-contract-for-the-marketing-site).
+- `POST /api/attrib/event` (also supports `OPTIONS` preflight). A page reports a callback request for a visit it holds the token of. Nothing can prove a person sent it, so what it can deliver is bounded: one per visit, a few per IP address and `PAGE_EVENT_DAILY_LIMIT` in all per 24 hours, and only for a visit seen in the last 24 hours. See [page-events.md](page-events.md).
 
 Internal (signed):
 - `POST /api/webhooks/acuity` - verifies signature, fetches appointment, creates canonical events, queues deliveries.
-- `POST /api/webhooks/opus` - verifies the Opus HMAC signature, records one `TRIAL_BOOKED` event per Opus lesson (idempotent), queues Google Ads/HubSpot deliveries. See [opus-trial-webhook.md](opus-trial-webhook.md).
+- `POST /api/webhooks/opus` - verifies the Opus HMAC signature, records one `TRIAL_BOOKED` event per Opus lesson and one account event per new Opus user (idempotent), queues their deliveries. See [opus-trial-webhook.md](opus-trial-webhook.md).
 - `POST /api/qstash/deliver` - verifies QStash signature and sends outbound deliveries.
 
 Debug:
@@ -103,6 +108,9 @@ See `.env.example` for the full list. Key values:
 - Meta: `META_PIXEL_ID`, `META_CAPI_ACCESS_TOKEN`, `META_CAPI_EVENT_NAME(S)`, optional `META_CAPI_TEST_EVENT_CODE`, `META_CAPI_API_VERSION`, `META_CAPI_LDU_ENABLED`, `META_CAPI_PREDICTED_LTV`, `META_CAPI_TEST_SECRET`
 - HubSpot: `HUBSPOT_PRIVATE_APP_TOKEN`, `HUBSPOT_EVENT_NAMES`, optional `HUBSPOT_SOURCE_SYSTEM`
 - Opus: `OPUS_WEBHOOK_SECRET`, `OPUS_DELIVERY_PLATFORMS`
+- Page events: `PAGE_DELIVERY_PLATFORMS`, `PAGE_EVENT_DAILY_LIMIT` (default 25), `PAGE_EVENT_DAILY_LIMIT_PER_IP` (default 3)
+- Accounts and page events: `EVENT_VALUES` (optional USD values, `source:EVENT=amount`)
+- Google Ads hold: `GOOGLE_ADS_HOLD_MINUTES` (default 375; `0` is off)
 - Google Ads: `GOOGLE_ADS_DEVELOPER_TOKEN`, OAuth creds, `GOOGLE_ADS_CUSTOMER_ID`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID`, `GOOGLE_ADS_CONVERSION_ACTION_ID(S)`, `GOOGLE_ADS_CONVERSION_ACTIONS` (per-event mapping), `GOOGLE_ADS_DEFAULT_PHONE_COUNTRY_CODE`, `GOOGLE_ADS_CONVERSION_TIMEZONE(_OFFSET)`, `GOOGLE_ADS_AD_USER_DATA_CONSENT`, `GOOGLE_ADS_AD_PERSONALIZATION_CONSENT` (currently ignored by code), optional `GOOGLE_ADS_VALIDATE_ONLY`/`GOOGLE_ADS_JOB_ID`
 - TikTok: `TIKTOK_PIXEL_ID`, `TIKTOK_ACCESS_TOKEN`, optional `TIKTOK_EVENT_ACTIONS`, `TIKTOK_TEST_EVENT_CODE`, `TIKTOK_DEFAULT_PHONE_COUNTRY_CODE`
 - Optional: `META_CAPI_TEST_SECRET`, `GOOGLE_ADS_TEST_SECRET`, `HUBSPOT_TEST_SECRET`, `TIKTOK_TEST_SECRET` (test endpoints)
@@ -300,6 +308,7 @@ Notes:
 - Non-trial `scheduled` actions map to `APPOINTMENT_BOOKED`; other non-trial updates map to `APPOINTMENT_UPDATED`.
 - `value` is set from Acuity `amountPaid` when available; `currency` is `USD`.
 - A `Delivery` row is created for each platform (Meta, Google Ads, TikTok, HubSpot).
+- Events that are not appointments (`ACCOUNT_CREATED`, `TEACHER_ACCOUNT_CREATED`, `CALLBACK_REQUESTED`) have no `appointmentId`, take `event_time` from when they happened and get `Delivery` rows for Google Ads and Meta only.
 
 ## Delivery behavior (Meta, Google Ads, TikTok, HubSpot)
 
@@ -327,6 +336,7 @@ Google Ads:
 - With `GOOGLE_ADS_VALIDATE_ONLY=true`, Google validates the upload but records no conversion; the delivery is marked `SKIPPED` (not `SUCCESS`) with a `GOOGLE_ADS_VALIDATE_ONLY:` response note.
 - `CLICK_NOT_FOUND` partial failures still count as `SUCCESS`; watch their rate in the response bodies.
 - Skips uploads with no click IDs and no user identifiers.
+- Every upload, Acuity's included, waits until `GOOGLE_ADS_HOLD_MINUTES` (default 375) after the visit's last touch, because Google rejects an upload for a click under six hours old. The delivery row carries the time as `notBefore` and a second queue message is scheduled for it; the other platforms are not delayed. A `TOO_RECENT_EVENT` answer puts the delivery back for later instead of failing it. See [the Google Ads hold](opus-trial-webhook.md#google-ads-hold).
 
 TikTok:
 - Uses Events API v1.3 with default mapping:
