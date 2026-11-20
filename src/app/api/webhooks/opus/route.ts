@@ -4,11 +4,17 @@ import { prisma } from "@/lib/prisma";
 import { hmacSha256Hex, sha256Hex } from "@/lib/crypto";
 import { timingSafeEqual } from "@/lib/auth";
 import { enqueueDelivery } from "@/lib/qstash";
-import { OPUS_DELIVERY_PLATFORMS, enabledOpusDeliveryPlatforms } from "@/lib/bookingSource";
+import {
+  AD_EVENT_DELIVERY_PLATFORMS,
+  OPUS_DELIVERY_PLATFORMS,
+  type OpusDeliveryPlatform,
+  enabledDeliveryPlatforms,
+} from "@/lib/bookingSource";
 import { ingestIdOrNull } from "@/lib/attribToken";
+import { configuredEventValue, hasNothingToMatch } from "@/lib/adEvents";
 import type { Attribution } from "@prisma/client";
 
-// Opus (app.fortelessons.com) reports each booked trial lesson here.
+// Opus (app.fortelessons.com) reports each booked trial lesson and each new account here.
 // Contract: docs/opus-trial-webhook.md.
 
 export const runtime = "nodejs";
@@ -18,7 +24,7 @@ const SIGNATURE_TOLERANCE_SECONDS = 300;
 // has no claim step, so a resend only requeues deliveries left unattempted this long.
 const REQUEUE_AFTER_MS = 10 * 60 * 1000;
 const STAFF_SCHEDULED_BY = "opus:staff";
-// An ingest row touched after the booking (plus this slack for clock skew and the send
+// An ingest row touched after the event (plus this slack for clock skew and the send
 // delay) has seen later visits, for example during a replay, so it is not used.
 const INGEST_TOUCH_SLACK_MS = 10 * 60 * 1000;
 
@@ -32,15 +38,62 @@ const text = (max: number) =>
     .transform((value) => value ?? null);
 const shortText = () => text(512);
 const longText = () => text(2048);
+const opusId = () => z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 
-const payloadSchema = z
+// The fields every event carries, whatever its type.
+const commonFields = {
+  schemaVersion: z.literal(1),
+  eventId: z.string().max(512),
+  occurredAt: isoDateTime,
+  contact: z.object({
+    email: shortText(),
+    phone: shortText(),
+    firstName: shortText(),
+    lastName: shortText(),
+  }),
+  client: z.object({
+    ip: shortText(),
+    userAgent: longText(),
+  }),
+  attribution: z.object({
+    // The visitor's ingest token (va_attrib on .fortelessons.com). Anything that is not a
+    // UUID is ignored rather than rejected, so a bad cookie never costs the event.
+    vaAttrib: z.unknown().optional(),
+    landingUrl: longText(),
+    referrer: longText(),
+    firstTouchAt: isoDateTime.nullish().transform((value) => value ?? null),
+    lastTouchAt: isoDateTime.nullish().transform((value) => value ?? null),
+    utm: z.object({
+      source: shortText(),
+      medium: shortText(),
+      campaign: shortText(),
+      term: shortText(),
+      content: shortText(),
+    }),
+    click: z.object({
+      gclid: shortText(),
+      gbraid: shortText(),
+      wbraid: shortText(),
+      fbclid: shortText(),
+      ttclid: shortText(),
+      msclkid: shortText(),
+      // The `_fbp`, `_fbc` and `_ttp` cookies, named as in the ingest contract.
+      fbp: shortText(),
+      fbc: shortText(),
+      ttp: shortText(),
+    }),
+    // The `hubspotutk` cookie, set only after the visitor consents to HubSpot tracking.
+    hubspotutk: shortText(),
+  }),
+  flags: z.object({ staffInitiated: z.boolean() }),
+};
+
+const trialBookedSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    ...commonFields,
     type: z.literal("trial.booked"),
-    eventId: z.string().max(512),
-    occurredAt: isoDateTime,
     booking: z.object({
-      lessonId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),
+      lessonId: opusId(),
       startsAt: isoDateTime,
       durationMinutes: z.number().int().positive().max(1440),
       instrument: shortText(),
@@ -53,54 +106,47 @@ const payloadSchema = z
       currency: z.string().regex(/^[A-Z]{3}$/),
       invoicePaid: z.boolean(),
     }),
-    contact: z.object({
-      email: shortText(),
-      phone: shortText(),
-      firstName: shortText(),
-      lastName: shortText(),
-    }),
-    client: z.object({
-      ip: shortText(),
-      userAgent: longText(),
-    }),
-    attribution: z.object({
-      // The visitor's ingest token (va_attrib on .fortelessons.com). Anything that is not a
-      // UUID is ignored rather than rejected, so a bad cookie never costs the booking.
-      vaAttrib: z.unknown().optional(),
-      landingUrl: longText(),
-      referrer: longText(),
-      firstTouchAt: isoDateTime.nullish().transform((value) => value ?? null),
-      lastTouchAt: isoDateTime.nullish().transform((value) => value ?? null),
-      utm: z.object({
-        source: shortText(),
-        medium: shortText(),
-        campaign: shortText(),
-        term: shortText(),
-        content: shortText(),
-      }),
-      click: z.object({
-        gclid: shortText(),
-        gbraid: shortText(),
-        wbraid: shortText(),
-        fbclid: shortText(),
-        ttclid: shortText(),
-        msclkid: shortText(),
-        // The `_fbp`, `_fbc` and `_ttp` cookies, named as in the ingest contract.
-        fbp: shortText(),
-        fbc: shortText(),
-        ttp: shortText(),
-      }),
-      // The `hubspotutk` cookie, set only after the visitor consents to HubSpot tracking.
-      hubspotutk: shortText(),
-    }),
-    flags: z.object({ staffInitiated: z.boolean() }),
   })
   .refine((payload) => payload.eventId === `opus_${payload.booking.lessonId}`, {
     message: "eventId must be opus_<booking.lessonId>",
     path: ["eventId"],
   });
 
-type TrialBookedPayload = z.infer<typeof payloadSchema>;
+// A family's account and a teacher's account are separate events, so each can have its own
+// conversion action in Google Ads and its own event name in Meta.
+const ACCOUNT_EVENT_NAMES = {
+  "account.created": "ACCOUNT_CREATED",
+  "teacher_account.created": "TEACHER_ACCOUNT_CREATED",
+} as const;
+
+const accountCreatedSchema = z
+  .object({
+    ...commonFields,
+    type: z.enum(["account.created", "teacher_account.created"]),
+    account: z.object({ userId: opusId() }),
+  })
+  .refine((payload) => payload.eventId === `opus_account_${payload.account.userId}`, {
+    message: "eventId must be opus_account_<account.userId>",
+    path: ["eventId"],
+  });
+
+type TrialBookedPayload = z.infer<typeof trialBookedSchema>;
+type AccountCreatedPayload = z.infer<typeof accountCreatedSchema>;
+type OpusPayload = TrialBookedPayload | AccountCreatedPayload;
+
+// Picked by `type` rather than tried in turn, so a rejected body names the fields at fault.
+function schemaFor(body: unknown) {
+  const type = (body as { type?: unknown } | null)?.type;
+  if (type === "trial.booked") return trialBookedSchema;
+  if (type === "account.created" || type === "teacher_account.created") {
+    return accountCreatedSchema;
+  }
+  return null;
+}
+
+function canonicalNameOf(payload: OpusPayload) {
+  return payload.type === "trial.booked" ? "TRIAL_BOOKED" : ACCOUNT_EVENT_NAMES[payload.type];
+}
 
 function verifySignature(
   raw: string,
@@ -122,33 +168,41 @@ function isUniqueViolation(error: unknown): boolean {
   );
 }
 
-function plannedDeliveries(payload: TrialBookedPayload) {
-  // Staff bookings are recorded but never delivered, like staff-booked Acuity appointments.
+type Snapshot = ReturnType<typeof attributionSnapshot>;
+
+function plannedDeliveries(payload: OpusPayload, snapshot: Snapshot) {
+  // Staff events are recorded but never delivered, like staff-booked Acuity appointments.
   if (payload.flags.staffInitiated) return [];
-  // Every platform that is switched on receives every booking, linked to a visit or not. A
-  // family often books in another browser than the one that clicked the ad, and the booker's
-  // hashed email and phone are then all a platform has to match the booking to that click.
-  const enabled = enabledOpusDeliveryPlatforms(process.env.OPUS_DELIVERY_PLATFORMS);
-  return OPUS_DELIVERY_PLATFORMS.map((platform) =>
-    enabled.has(platform)
-      ? { platform, status: "PENDING" as const, responseBody: null }
-      : {
-          platform,
-          status: "SKIPPED" as const,
-          responseBody: `Opus delivery to ${platform} is off (not listed in OPUS_DELIVERY_PLATFORMS)`,
-        },
-  );
+  const isBooking = payload.type === "trial.booked";
+  const skipped = (platform: OpusDeliveryPlatform, responseBody: string) => ({
+    platform,
+    status: "SKIPPED" as const,
+    responseBody,
+  });
+  // Every platform that is switched on receives every event, linked to a visit or not. A
+  // family often books in another browser than the one that clicked the ad, and the hashed
+  // email and phone are then all a platform has to match the event to that click.
+  const enabled = enabledDeliveryPlatforms(process.env.OPUS_DELIVERY_PLATFORMS);
+  // A booking also goes to HubSpot. An account does not: Opus already writes that contact.
+  return (isBooking ? OPUS_DELIVERY_PLATFORMS : AD_EVENT_DELIVERY_PLATFORMS).map((platform) => {
+    if (!enabled.has(platform)) {
+      return skipped(
+        platform,
+        `Opus delivery to ${platform} is off (not listed in OPUS_DELIVERY_PLATFORMS)`,
+      );
+    }
+    if (!isBooking && hasNothingToMatch(snapshot, payload.contact)) {
+      return skipped(platform, "No click ID and no contact details to match this event with");
+    }
+    return { platform, status: "PENDING" as const, responseBody: null };
+  });
 }
 
-// The Opus Attribution row: the visitor's ingest row frozen at booking time, so later page
-// views cannot change a past conversion. The event's own capture fills only the fields the
-// ingest row lacks (for example a gclid seen only when the visitor landed directly in the
-// app). IP and user agent always come from the booking request.
-function attributionSnapshot(
-  payload: TrialBookedPayload,
-  ingest: Attribution | null,
-  occurredAt: Date,
-) {
+// The event's Attribution row: the visitor's ingest row frozen when the event happened, so
+// later page views cannot change a past conversion. The event's own capture fills only the
+// fields the ingest row lacks (for example a gclid seen only when the visitor landed directly
+// in the app). IP and user agent always come from the request that caused the event.
+function attributionSnapshot(payload: OpusPayload, ingest: Attribution | null, occurredAt: Date) {
   const { attribution: event, client } = payload;
   return {
     token: payload.eventId,
@@ -183,11 +237,11 @@ function attributionSnapshot(
   };
 }
 
-async function record(raw: string, payload: TrialBookedPayload) {
-  const { eventId, booking, contact, attribution, flags } = payload;
+async function record(raw: string, payload: OpusPayload) {
+  const { eventId, contact, attribution, flags } = payload;
   const occurredAt = new Date(payload.occurredAt);
-  // A missing, malformed or unknown token leaves the event's own capture, which Opus froze at
-  // booking, as the only source. So does an ingest row last touched after the booking.
+  // A missing, malformed or unknown token leaves the event's own capture, which Opus froze
+  // when it happened, as the only source. So does an ingest row last touched after the event.
   const ingestToken = ingestIdOrNull(attribution.vaAttrib);
   const ingestRow = ingestToken
     ? await prisma.attribution.findUnique({ where: { token: ingestToken } })
@@ -196,54 +250,83 @@ async function record(raw: string, payload: TrialBookedPayload) {
     ingestRow && ingestRow.lastTouchAt.getTime() <= occurredAt.getTime() + INGEST_TOUCH_SLACK_MS
       ? ingestRow
       : null;
-  const deliveries = plannedDeliveries(payload);
   const snapshot = attributionSnapshot(payload, ingest, occurredAt);
+  const deliveries = plannedDeliveries(payload, snapshot);
+  const name = canonicalNameOf(payload);
+  // A booking carries its own price. An account has none, so its value is a setting.
+  const value =
+    payload.type === "trial.booked"
+      ? payload.booking.valueCents == null
+        ? null
+        : payload.booking.valueCents / 100
+      : configuredEventValue("opus", name);
+  const currency =
+    payload.type === "trial.booked" ? payload.booking.currency : value == null ? null : "USD";
 
   return prisma.$transaction(async (tx) => {
     await tx.inboundWebhook.create({
       data: {
         source: "opus",
-        action: "trial.booked",
+        action: payload.type,
         externalId: eventId,
         bodyRaw: raw,
         bodyHash: sha256Hex(raw),
       },
     });
 
-    // The primary key makes the event ID the idempotency key: a resend with a
-    // different body still collides here.
-    await tx.appointment.create({
-      data: {
-        id: eventId,
-        status: "scheduled",
-        datetime: booking.startsAt,
-        email: contact.email,
-        phone: contact.phone,
-        firstName: contact.firstName,
-        lastName: contact.lastName,
-        scheduledBy: flags.staffInitiated ? STAFF_SCHEDULED_BY : null,
-        // The visitor's ingest token links its visit history, as on an Acuity appointment.
-        // Without one, it links the booking's own Attribution row below.
-        vaAttrib: ingest?.token ?? eventId,
-        gclid: snapshot.gclid,
-        ttclid: snapshot.ttclid,
-        rawJson: raw,
-      },
-    });
+    if (payload.type === "trial.booked") {
+      // The primary key makes the event ID the idempotency key: a resend with a
+      // different body still collides here.
+      await tx.appointment.create({
+        data: {
+          id: eventId,
+          status: "scheduled",
+          datetime: payload.booking.startsAt,
+          email: contact.email,
+          phone: contact.phone,
+          firstName: contact.firstName,
+          lastName: contact.lastName,
+          scheduledBy: flags.staffInitiated ? STAFF_SCHEDULED_BY : null,
+          // The visitor's ingest token links its visit history, as on an Acuity appointment.
+          // Without one, it links the booking's own Attribution row below.
+          vaAttrib: ingest?.token ?? eventId,
+          gclid: snapshot.gclid,
+          ttclid: snapshot.ttclid,
+          rawJson: raw,
+        },
+      });
+    }
 
+    // For an event with no appointment, this row's primary key is the idempotency key.
     await tx.attribution.create({ data: snapshot });
 
     const canonicalEvent = await tx.canonicalEvent.create({
       data: {
-        name: "TRIAL_BOOKED",
+        name,
         eventTime: occurredAt,
-        appointmentId: eventId,
+        appointmentId: payload.type === "trial.booked" ? eventId : null,
         attributionTok: eventId,
-        value: booking.valueCents == null ? null : booking.valueCents / 100,
-        currency: booking.currency,
+        value,
+        currency,
         eventId,
       },
     });
+
+    if (payload.type !== "trial.booked") {
+      // An account is not an appointment: the dashboard and HubSpot delivery would treat an
+      // Appointment row as a booking, so its contact details live on their own row.
+      await tx.eventContact.create({
+        data: {
+          canonicalEventId: canonicalEvent.id,
+          email: contact.email,
+          phone: contact.phone,
+          firstName: contact.firstName,
+          lastName: contact.lastName,
+          vaAttrib: ingest?.token ?? null,
+          staffInitiated: flags.staffInitiated,
+        },
+      });
+    }
 
     if (deliveries.length > 0) {
       await tx.delivery.createMany({
@@ -261,15 +344,22 @@ async function record(raw: string, payload: TrialBookedPayload) {
   });
 }
 
-// A unique violation is a resend only when this booking's event already exists; anything
-// else (for example an unrelated Attribution row with the same token) is a conflict.
+// A unique violation is a resend only when this very event already exists; anything else (for
+// example an unrelated Attribution row with the same token, or the same user reported as
+// both a family and a teacher) is a conflict.
 // A resend writes nothing. Deliveries still unattempted after REQUEUE_AFTER_MS (the first
 // request recorded the event but could not queue it) are queued again.
 async function resolveDuplicate(
-  eventId: string,
+  payload: OpusPayload,
 ): Promise<{ duplicate: false } | { duplicate: true; requeued: boolean }> {
+  const { eventId } = payload;
   const existing = await prisma.canonicalEvent.findFirst({
-    where: { appointmentId: eventId, name: "TRIAL_BOOKED" },
+    // A booking is found by its appointment, as before. An account has none, so by the token
+    // of its own Attribution row, which is the same ID.
+    where:
+      payload.type === "trial.booked"
+        ? { appointmentId: eventId, name: "TRIAL_BOOKED" }
+        : { attributionTok: eventId, name: ACCOUNT_EVENT_NAMES[payload.type] },
     include: { deliveries: true },
   });
   if (!existing) return { duplicate: false };
@@ -305,14 +395,24 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ ok: false, error: "Invalid JSON" }, { status: 400 });
   }
-  const parsed = payloadSchema.safeParse(parsedJson);
+  const schema = schemaFor(parsedJson);
+  if (!schema) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "type: must be trial.booked, account.created or teacher_account.created",
+      },
+      { status: 400 },
+    );
+  }
+  const parsed = schema.safeParse(parsedJson);
   if (!parsed.success) {
     const error = parsed.error.issues
       .map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`)
       .join("; ");
     return NextResponse.json({ ok: false, error }, { status: 400 });
   }
-  const payload = parsed.data;
+  const payload: OpusPayload = parsed.data;
   const { eventId } = payload;
 
   let recorded: { canonicalEventId: string; queue: boolean };
@@ -321,7 +421,7 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     if (isUniqueViolation(error)) {
       try {
-        const outcome = await resolveDuplicate(eventId);
+        const outcome = await resolveDuplicate(payload);
         if (!outcome.duplicate) {
           console.error("Opus webhook: conflicting record", { eventId });
           return NextResponse.json(
@@ -363,7 +463,10 @@ export async function POST(req: NextRequest) {
     canonicalEventId: recorded.canonicalEventId,
     queued: recorded.queue,
     ...(payload.flags.staffInitiated
-      ? { skippedOutbound: true, skipReason: "opus_staff_booking" }
+      ? {
+          skippedOutbound: true,
+          skipReason: payload.type === "trial.booked" ? "opus_staff_booking" : "opus_staff_account",
+        }
       : {}),
   });
 }

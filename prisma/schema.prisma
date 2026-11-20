@@ -13,6 +13,9 @@ enum CanonicalEventName {
   TRIAL_CANCELED
   APPOINTMENT_BOOKED
   APPOINTMENT_UPDATED
+  ACCOUNT_CREATED
+  TEACHER_ACCOUNT_CREATED
+  CALLBACK_REQUESTED
 }
 
 enum DeliveryPlatform {
@@ -147,10 +150,36 @@ model CanonicalEvent {
   eventId         String
 
   deliveries      Delivery[]
+  contact         EventContact?
 
   @@index([appointmentId])
   @@index([attributionTok])
   @@index([name, eventTime])
+}
+
+// Contact details and visit link of an event that is not an appointment: an account created in
+// Opus, a callback requested on the trial page. Appointments keep theirs on Appointment.
+model EventContact {
+  canonicalEventId String         @id
+  createdAt        DateTime       @default(now())
+
+  email            String?
+  phone            String?
+  firstName        String?
+  lastName         String?
+
+  // The visitor's ingest token when the event was linked to a visit, as on Appointment.
+  vaAttrib         String?
+  // Recorded but never delivered, like a staff-booked appointment.
+  staffInitiated   Boolean        @default(false)
+  // Where a page's event was reported from, as its daily limit per address counts it: an IPv4
+  // address, or the /64 network of an IPv6 address.
+  ipAddress        String?
+
+  canonicalEvent   CanonicalEvent @relation(fields: [canonicalEventId], references: [id])
+
+  @@index([vaAttrib])
+  @@index([ipAddress])
 }
 
 model Delivery {

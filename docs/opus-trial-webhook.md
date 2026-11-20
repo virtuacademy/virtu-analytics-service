@@ -1,8 +1,11 @@
-# Opus trial bookings → attrib
+# Opus trial bookings and accounts → attrib
 
 Opus (app.fortelessons.com) books trial lessons ("Meet & Greets") without Acuity. This contract
 lets Opus report each booking here so Google Ads, HubSpot and Meta receive the same kind of
 `TRIAL_BOOKED` conversion that Acuity bookings already produce (see "Delivery").
+
+Opus also reports each new account here, a family's and a teacher's as separate events, so
+Google Ads and Meta can count and bid on signups (see "Accounts").
 
 Owners: this service owns the endpoint and the contract; Opus
 (`server/providers/attrib/` in the Opus repo) is the only sender. Change both sides together and bump
@@ -30,7 +33,7 @@ Two sites can hand the token to Opus. Only the second does today:
    the next call. That request and response, below, are the contract the marketing site follows.
 2. **The token reaches Opus.** app.fortelessons.com shares `.fortelessons.com`, so the Opus
    server reads the `va_attrib` cookie when the trial is booked.
-3. **Opus sends the token** as `attribution.vaAttrib` in `trial.booked`.
+3. **Opus sends the token** as `attribution.vaAttrib` in every event.
 4. **attrib snapshots the ingest row.** The booking's own Attribution row is built from the
    visitor's ingest row as it stands at booking time, so later page views cannot change a past
    conversion. Opus's own capture (below) fills only the fields the ingest row lacks, for
@@ -185,27 +188,78 @@ of a captured request; resends re-sign with a fresh timestamp.
 - String fields are capped at 2048 characters (URLs, user agent) or 512 (everything else).
   Longer values are rejected with 400, so the sender truncates. Unknown fields are ignored.
 
+### Accounts (`account.created`, `teacher_account.created`)
+
+Sent once when an account is created: `account.created` for a learner or a parent,
+`teacher_account.created` for a teacher. They are separate events so each has its own
+conversion action in Google Ads and its own event name in Meta. Same endpoint, headers,
+signature and `schemaVersion: 1` as a booking; a new `type` is not a breaking change.
+
+```json
+{
+  "schemaVersion": 1,
+  "type": "account.created",
+  "eventId": "opus_account_<userId>",
+  "occurredAt": "2026-11-20T15:04:05.000Z",
+  "account": { "userId": "<userId>" },
+  "contact": {
+    "email": "parent@example.com",
+    "phone": "+15555550123",
+    "firstName": "Pat",
+    "lastName": "Example"
+  },
+  "client": { "ip": "203.0.113.7", "userAgent": "Mozilla/5.0 …" },
+  "attribution": { "…": "exactly as in trial.booked" },
+  "flags": { "staffInitiated": false }
+}
+```
+
+- `eventId` is always `opus_account_` + `account.userId` (letters, digits, `_` and `-`, at most
+  128), whichever of the two types it is. One user is one event: a resend is deduplicated, and
+  the same user reported under the other type is answered 409.
+- `occurredAt` is when the account was created. It becomes the conversion time.
+- `contact` is the new account's own email, phone and name. Opus decides which signups to
+  report (no one under 18, no staff address); attrib records whatever it receives.
+- `client` is the IP and user agent of the signup request.
+- `attribution` has the same fields and rules as in `trial.booked`: `vaAttrib` links the
+  visitor's ingest row, and the rest is Opus's own capture.
+- There is no `booking` and no value. The conversion value comes from `EVENT_VALUES` here
+  (`opus:ACCOUNT_CREATED=<USD>`, `opus:TEACHER_ACCOUNT_CREATED=<USD>`); without an entry no
+  value is stored or sent.
+- `flags.staffInitiated` is `true` when Forte staff created the account. It is recorded and
+  never delivered.
+- Required: `schemaVersion`, `type`, `eventId`, `occurredAt`, `account.userId`,
+  `flags.staffInitiated`, and the `contact`, `client`, `attribution`, `attribution.utm` and
+  `attribution.click` objects. Every other field may be `null` or omitted. Limits and datetime
+  format are those of `trial.booked`.
+
+A booking's `eventId` is `opus_<lessonId>` and an account's `opus_account_<userId>`. They share
+one namespace, so a lesson ID must never begin with `account_`; Opus IDs are UUIDs.
+
 ## Response
 
 | Status | Body | Meaning |
 | --- | --- | --- |
 | 200 | `{ "ok": true, "eventId", "canonicalEventId", "queued" }` | Recorded. See `queued` below |
-| 200 | `{ "ok": true, "eventId", "deduped": true, "requeued" }` | This booking's event already exists; see resends below |
+| 200 | `{ "ok": true, "eventId", "deduped": true, "requeued" }` | This very event already exists; see resends below |
 | 400 | `{ "ok": false, "error" }` | Body does not match the contract; `error` names the fields. Do not retry unchanged |
 | 401 | `{ "ok": false, "error" }` | Missing, bad or stale signature |
-| 409 | `{ "ok": false, "eventId", "error": "Conflicting record for this eventId" }` | A row with this ID exists but is not this booking's event. Nothing written; needs investigation, not a resend |
+| 409 | `{ "ok": false, "eventId", "error": "Conflicting record for this eventId" }` | A row with this ID exists but is not this event (for example the same user already reported under the other account type). Nothing written; needs investigation, not a resend |
 | 500 | `{ "ok": false, "error" }` | No secret configured, a database error, or (`"recorded": true`) recorded but not queued |
 
 - `queued: true` means the deliveries were handed to QStash. That hand-off is a no-op when
   `QSTASH_TOKEN` or `PUBLIC_BASE_URL` is unset, so `queued` does not prove a worker will run.
   `queued: false` means every delivery was written as `SKIPPED` (or none, for staff bookings).
-- **Resends.** Recording is deduplicated by `eventId`: when a `TRIAL_BOOKED` event for this
-  appointment already exists, the resend writes nothing and answers `deduped: true`. Its
+- **Resends.** Recording is deduplicated by `eventId`: when an event of this type with this
+  `eventId` already exists, the resend writes nothing and answers `deduped: true`. Its
   deliveries are queued again (`requeued: true`) only if the event is more than 10 minutes old
   and still has a delivery that is `PENDING` with no attempts, which repairs a request that
   recorded the event but failed to queue it. Within those 10 minutes the first request's queue
-  message may still be on its way, and requeuing then could deliver twice.
-- Staff bookings add `"skippedOutbound": true`.
+  message may still be on its way, and requeuing then could deliver twice. A Google Ads
+  delivery waiting for a too-recent retry (see below) has been attempted, so it is not
+  requeued.
+- Staff events add `"skippedOutbound": true` and a `skipReason` (`opus_staff_booking` or
+  `opus_staff_account`).
 
 ## What gets recorded
 
@@ -230,6 +284,23 @@ One transaction writes:
 - `CanonicalEvent` `TRIAL_BOOKED` with `eventTime = occurredAt` and `value = valueCents / 100`.
 - `Delivery` rows for `GOOGLE_ADS`, `HUBSPOT` and `META` only. A platform not listed in
   `OPUS_DELIVERY_PLATFORMS` is written as `SKIPPED`, so Opus deliveries start switched off.
+
+A booking writes only to tables and columns that existed before accounts and page events
+were added, and its delivery reads only those. It works on a database that does not have the
+`EventContact` table or the new event names yet.
+
+An account writes the same rows with these differences:
+
+- `InboundWebhook` has `action` = the event's `type`.
+- No `Appointment`. The dashboard and HubSpot delivery read an appointment as a booking, so
+  the contact fields go to an `EventContact` row instead, with `vaAttrib` = the known ingest
+  token (or null) and `staffInitiated`.
+- The `Attribution` snapshot (`token = eventId`) is the idempotency key.
+- `CanonicalEvent` is `ACCOUNT_CREATED` or `TEACHER_ACCOUNT_CREATED` with no `appointmentId`,
+  and `value` from `EVENT_VALUES` or none.
+- `Delivery` rows for `GOOGLE_ADS` and `META` only; Opus already writes the contact to HubSpot.
+  An account with no ad click ID, no email and no phone gets both rows `SKIPPED`: no platform
+  could match it.
 
 ## Delivery
 
@@ -277,6 +348,21 @@ The existing QStash worker sends the deliveries.
   - `META_CAPI_TEST_EVENT_CODE` applies to every Meta event of both booking systems. Meta
     does not drop such events: its documentation says they "flow into Events Manager and are
     used for targeting and ads measurement purposes". Leave it empty in production.
+- **Accounts:** delivered like a booking, with these differences.
+  - **Google Ads:** the actions mapped as `opus:ACCOUNT_CREATED` and
+    `opus:TEACHER_ACCOUNT_CREATED` in `GOOGLE_ADS_CONVERSION_ACTIONS`. Without its entry an
+    event is `SKIPPED`; it never lands in the booking action or any other.
+  - **Meta:** the names mapped as `opus:ACCOUNT_CREATED` (suggested `CompleteRegistration`) and
+    `opus:TEACHER_ACCOUNT_CREATED` (a custom name, for example `TeacherRegistration`, since
+    Meta has one standard registration event) in `META_CAPI_EVENT_NAMES`. Without its entry
+    an event is `SKIPPED`; there is no fallback name. Custom data carries only the visit's
+    `utm_source`, `utm_medium` and `utm_campaign`.
+  - **Every reported account,** from any page, linked to a visit or not, whatever the visitor
+    chose in Termly. Opus decides which signups it reports.
+  - **HubSpot:** nothing.
+  - The mapping entries are the per-event switch: with `GOOGLE_ADS` or `META` already listed
+    in `OPUS_DELIVERY_PLATFORMS` for bookings, an account event is still `SKIPPED` there until
+    its own entry exists.
 - **Consent (v1):** like Acuity uploads, Opus uploads mark `adUserData` and `adPersonalization`
   as granted. As on virtu.academy, the marketing site's page-view capture (`/api/attrib/ingest`)
   and Opus's own click capture run whatever the visitor chose in Termly, and so do the Google
@@ -305,9 +391,44 @@ The existing QStash worker sends the deliveries.
 - An Opus event is only ever delivered to a platform that is `GOOGLE_ADS`, `HUBSPOT` or `META`
   and is listed in `OPUS_DELIVERY_PLATFORMS` when the worker runs; any other delivery row is
   marked `SKIPPED` without calling the platform.
-- `va_attrib` values shaped like `opus_…` are never accepted from a browser: ingest replaces a
-  cookie that is not one of its UUID tokens, and the Acuity webhook ignores such an intake
-  value.
+- `va_attrib` values shaped like `opus_…` or `page_…` (the tokens of recorded events) are never
+  accepted from a browser: ingest replaces a cookie that is not one of its UUID tokens, and the
+  Acuity webhook ignores such an intake value.
+
+### Google Ads: an upload called too recent
+
+Every Google Ads upload goes at once, for every source (Acuity, Opus, page events). Google's
+reference says an upload is refused while its click (`TOO_RECENT_EVENT`) or a newly created
+conversion action (`TOO_RECENT_CONVERSION_ACTION`) is under six hours old, "Retry after 6
+hours have passed". Production has not shown that refusal (21 uploads accepted and none
+refused between 2026-11-07 and 2026-11-20), so nothing is delayed up front. Only an upload
+Google actually refuses this way is tried again later:
+
+- **When.** Google's answer consists of those two codes and nothing else. Any other error
+  beside them is a plain failure, as before.
+- **What happens.** The delivery stays `PENDING`. Its `responseBody` starts with the marker
+  `TOO_RECENT_RETRY n/4`, `attempts` goes up by one, `lastAttemptAt` is set, and one queue
+  message is scheduled 6 hours 15 minutes later. No new column carries any of this.
+- **The later message names the platform** (`{ "canonicalEventId", "platform": "GOOGLE_ADS" }`)
+  and a run for it touches only that event's Google Ads deliveries. An ordinary message tries
+  every `FAILED` delivery of the event again, and a HubSpot event has no idempotency key. No
+  other platform name and no other field is accepted.
+- **Until it is due,** any other run for the event (a queue retry for another platform, a
+  resend) leaves the waiting delivery alone, so it cannot use up the retries. "Due" is 6 hours
+  10 minutes after `lastAttemptAt`: five minutes less than the delay, so the delivery's own
+  message never comes too early by this server's clock.
+- **At most four retries.** If Google still calls the fourth too recent, the delivery is
+  `FAILED`. The count survives other failures: a delivery that fails for another reason in
+  between (an outage, a rate limit, a thrown error) keeps `TOO_RECENT_RETRY n/4 used.` at the
+  start of its `responseBody`, and so does one that failed at the limit, so a later run cannot
+  start a new round.
+- **If the later message cannot be queued,** the delivery is `FAILED` with that reason and an
+  error is logged.
+- **The queue is not asked to retry** the message that got the answer: the worker answers 200.
+- A lost later message leaves that one delivery `PENDING` for good. Nothing sweeps it.
+- A retried Acuity upload reads the visit as it is at retry time, as an immediate upload
+  does. Opus and page events keep a frozen copy of the visit.
+- A `CLICK_NOT_FOUND` answer still counts as `SUCCESS`, as before.
 
 ### Rollout
 
@@ -327,13 +448,26 @@ Never give an older version an `opus:` entry: there every entry counts as a mapp
 events that rely on the built-in names stop being sent. And never run with `META` on and no
 `opus:TRIAL_BOOKED` name: the worker records each qualifying booking as `SKIPPED`.
 
+For accounts:
+
+1. Bring the database up to date (`npx prisma migrate deploy`) before this version deploys.
+   Accounts and page events need the new event names and the `EventContact` table. If the
+   version deploys first, only those new events fail (answered 500, nothing written, so a
+   resend records them later); bookings are recorded and delivered as before.
+2. Create the two Google Ads conversion actions at least six hours before the first event
+   (a too-recent action costs retries), then add `opus:ACCOUNT_CREATED=<id>` and
+   `opus:TEACHER_ACCOUNT_CREATED=<id>` to `GOOGLE_ADS_CONVERSION_ACTIONS`, and the two names to
+   `META_CAPI_EVENT_NAMES`, keeping every entry already there.
+3. An account recorded before its entry exists is `SKIPPED` and never delivered later.
+
 ## Configuration
 
 | Variable | Where | Purpose |
 | --- | --- | --- |
 | `OPUS_WEBHOOK_SECRET` | attrib | Shared HMAC secret. The endpoint answers 500 without it. |
 | `OPUS_DELIVERY_PLATFORMS` | attrib | Comma list of `GOOGLE_ADS`, `HUBSPOT`, `META`. Empty means record only. |
-| `GOOGLE_ADS_CONVERSION_ACTIONS` | attrib | Add `opus:TRIAL_BOOKED=7889634403`. |
-| `META_CAPI_EVENT_NAMES` | attrib | Add `opus:TRIAL_BOOKED=<Meta event name>`. Opus sends nothing to Meta without it. |
+| `GOOGLE_ADS_CONVERSION_ACTIONS` | attrib | Add `opus:TRIAL_BOOKED=7889634403`, and `opus:ACCOUNT_CREATED=<id>` and `opus:TEACHER_ACCOUNT_CREATED=<id>` for accounts. |
+| `META_CAPI_EVENT_NAMES` | attrib | Add `opus:TRIAL_BOOKED=<Meta event name>`, and `opus:ACCOUNT_CREATED=<name>` and `opus:TEACHER_ACCOUNT_CREATED=<name>` for accounts. An event with no entry is not sent to Meta. |
+| `EVENT_VALUES` | attrib | Optional USD values for events that carry none: `opus:ACCOUNT_CREATED=15,opus:TEACHER_ACCOUNT_CREATED=15`. Without an entry no value is sent. |
 | `ATTRIB_WEBHOOK_URL` | Opus | Full endpoint URL. Opus sends nothing without it. |
 | `ATTRIB_WEBHOOK_SECRET` | Opus | Same value as `OPUS_WEBHOOK_SECRET`. |

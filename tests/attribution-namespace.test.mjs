@@ -152,7 +152,8 @@ test("attrib's own cookies still win over body IDs on virtu.academy", async () =
   assert.equal(result.token, cookieIds.va_attrib);
 });
 
-test("an Acuity intake va_attrib naming an Opus token is ignored", async () => {
+// Runs the real Acuity webhook for a booking whose va_attrib intake field holds `intakeValue`.
+async function acuityBookingWithIntake(intakeValue) {
   const appointments = [];
   const events = [];
   const { POST } = loadTsModule(
@@ -163,7 +164,7 @@ test("an Acuity intake va_attrib naming an Opus token is ignored", async () => {
       "@/lib/crypto": { sha256Base64: () => "sig", sha256Hex: () => "hash" },
       "@/lib/acuity": {
         fetchAppointmentById: async () => ({ id: 123, appointmentTypeID: 456 }),
-        extractIntakeValue: (_appt, fieldId) => (fieldId === 111 ? "opus_lesson-1" : null),
+        extractIntakeValue: (_appt, fieldId) => (fieldId === 111 ? intakeValue : null),
         appointmentSnapshot: () => ({ scheduledBy: null }),
       },
       "@/lib/qstash": { enqueueDelivery: async () => {} },
@@ -197,6 +198,26 @@ test("an Acuity intake va_attrib naming an Opus token is ignored", async () => {
     headers: new Headers({ "x-acuity-signature": "sig" }),
     text: async () => "action=scheduled&id=123",
   });
-  assert.equal(appointments[0].create.vaAttrib, null);
-  assert.equal(events[0].attributionTok, null);
+  return { vaAttrib: appointments[0].create.vaAttrib, attributionTok: events[0].attributionTok };
+}
+
+test("an Acuity intake va_attrib naming an Opus token is ignored", async () => {
+  const booking = await acuityBookingWithIntake("opus_lesson-1");
+  assert.equal(booking.vaAttrib, null);
+  assert.equal(booking.attributionTok, null);
+});
+
+test("an Acuity intake va_attrib naming a page event's token is ignored, and a visit's own is kept", async () => {
+  // A page event's frozen visit must never become an Acuity booking's visit.
+  const pageEvent = await acuityBookingWithIntake(
+    "page_callback_0b6c5a1e-3f4d-4c2b-9a8e-7d6f5e4c3b2a",
+  );
+  assert.equal(pageEvent.vaAttrib, null);
+  assert.equal(pageEvent.attributionTok, null);
+
+  // Anything else passes through exactly as before.
+  const visitToken = "0b6c5a1e-3f4d-4c2b-9a8e-7d6f5e4c3b2a";
+  const visit = await acuityBookingWithIntake(visitToken);
+  assert.equal(visit.vaAttrib, visitToken);
+  assert.equal(visit.attributionTok, visitToken);
 });

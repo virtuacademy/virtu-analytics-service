@@ -8,7 +8,8 @@ Analytics and conversion tracking service for Virtu. Captures attribution from W
 - Captures UTMs, click IDs, and platform cookies (`_fbp`, `_fbc`, `_ttp`, `hubspotutk`)
 - Processes Acuity "changed" webhooks into canonical events
 - Records Opus trial bookings (signed `trial.booked` webhook) and delivers them to Google Ads, HubSpot and Meta; no other platform ([contract](docs/opus-trial-webhook.md))
-- Sends conversions via QStash to Meta, Google Ads, HubSpot, TikTok, and ChatGPT Ads (OpenAI; disabled until configured)
+- Records accounts created in Opus (a family's and a teacher's as separate events, same webhook) and callback requests from the trial page ([contract](docs/page-events.md)), and delivers them to Google Ads and Meta only
+- Sends conversions via QStash to Meta, Google Ads, HubSpot, TikTok, and ChatGPT Ads (OpenAI; disabled until configured). A Google Ads upload that Google calls too recent is retried about six hours later ([how](docs/opus-trial-webhook.md#google-ads-an-upload-called-too-recent))
 - Provides a small dashboard and GraphQL debug endpoint (protected when `AUTH_PASSWORD` is set)
 
 ## Quick start
@@ -60,7 +61,9 @@ Key env vars (see `.env.example` for the full list):
 - QStash: `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`
 - Meta: `META_PIXEL_ID`, `META_CAPI_ACCESS_TOKEN`, `META_CAPI_EVENT_NAME(S)`, optional `META_CAPI_TEST_EVENT_CODE`, `META_CAPI_API_VERSION`, `META_CAPI_LDU_ENABLED`, `META_CAPI_PREDICTED_LTV`
 - HubSpot: `HUBSPOT_PRIVATE_APP_TOKEN`, `HUBSPOT_EVENT_NAMES`, optional `HUBSPOT_SOURCE_SYSTEM`
-- Opus: `OPUS_WEBHOOK_SECRET`, `OPUS_DELIVERY_PLATFORMS` (empty records without delivering), plus an `opus:TRIAL_BOOKED=<id>` entry in `GOOGLE_ADS_CONVERSION_ACTIONS` and an `opus:TRIAL_BOOKED=<Meta event name>` entry in `META_CAPI_EVENT_NAMES`
+- Opus: `OPUS_WEBHOOK_SECRET`, `OPUS_DELIVERY_PLATFORMS` (empty records without delivering), plus an `opus:TRIAL_BOOKED=<id>` entry in `GOOGLE_ADS_CONVERSION_ACTIONS` and an `opus:TRIAL_BOOKED=<Meta event name>` entry in `META_CAPI_EVENT_NAMES`. Accounts need their own `opus:ACCOUNT_CREATED` and `opus:TEACHER_ACCOUNT_CREATED` entries in both
+- Page events: `PAGE_DELIVERY_PLATFORMS` (empty records without delivering; also the way to stop a flood), `PAGE_EVENT_DAILY_LIMIT_PER_IP` (default 3), `PAGE_EVENT_DAILY_ALERT_THRESHOLD` (default 25; logs an error past it, never stops delivery), plus `page:CALLBACK_REQUESTED` entries in `GOOGLE_ADS_CONVERSION_ACTIONS` and `META_CAPI_EVENT_NAMES`
+- Values for events that carry none: `EVENT_VALUES` (`source:EVENT=<USD>` pairs; unset sends no value)
 - Google Ads: `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_CLIENT_ID`, `GOOGLE_ADS_CLIENT_SECRET`, `GOOGLE_ADS_REFRESH_TOKEN`, `GOOGLE_ADS_CUSTOMER_ID`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID`, `GOOGLE_ADS_CONVERSION_ACTION_ID(S)`, `GOOGLE_ADS_DEFAULT_PHONE_COUNTRY_CODE`, timezone settings, optional `GOOGLE_ADS_VALIDATE_ONLY`/`GOOGLE_ADS_JOB_ID`, consent settings (`GOOGLE_ADS_AD_USER_DATA_CONSENT`, `GOOGLE_ADS_AD_PERSONALIZATION_CONSENT`, currently ignored by code)
 - TikTok: `TIKTOK_PIXEL_ID`, `TIKTOK_ACCESS_TOKEN`, optional `TIKTOK_EVENT_ACTIONS`, `TIKTOK_TEST_EVENT_CODE`, `TIKTOK_DEFAULT_PHONE_COUNTRY_CODE`
 - Optional: `META_CAPI_TEST_SECRET`, `GOOGLE_ADS_TEST_SECRET`, `HUBSPOT_TEST_SECRET`, and `TIKTOK_TEST_SECRET` for test endpoints
@@ -69,8 +72,9 @@ Key env vars (see `.env.example` for the full list):
 ## API endpoints
 
 - `POST /api/attrib/ingest` (body: `url`, `referrer`, `utm`, `click`, `hubspotutk`, and optional `vid`/`sid`/`attribTok` for sites that cannot receive this service's cookies; see [the ingest contract](docs/opus-trial-webhook.md#ingest-contract-for-the-marketing-site))
+- `POST /api/attrib/event` (public; a page reports a callback request; see [docs/page-events.md](docs/page-events.md))
 - `POST /api/webhooks/acuity`
-- `POST /api/webhooks/opus` (signed by Opus; see [docs/opus-trial-webhook.md](docs/opus-trial-webhook.md))
+- `POST /api/webhooks/opus` (signed by Opus; bookings and accounts; see [docs/opus-trial-webhook.md](docs/opus-trial-webhook.md))
 - `POST /api/qstash/deliver`
 - `GET|POST /api/graphql` (debug; requires auth when `AUTH_PASSWORD` is set)
 - `POST /api/test/meta` (manual testing)
@@ -82,7 +86,8 @@ Key env vars (see `.env.example` for the full list):
 ## Documentation
 
 - Architecture, Webflow/Acuity setup, and data flow: `docs/analytics-v1.md`
-- Opus trial booking contract: `docs/opus-trial-webhook.md`
+- Opus contract (trial bookings, accounts, the retry of a too-recent Google Ads upload): `docs/opus-trial-webhook.md`
+- Page event contract (callback requests): `docs/page-events.md`
 
 ## Useful commands
 
@@ -96,4 +101,5 @@ Key env vars (see `.env.example` for the full list):
 - `npm run typecheck`
 - `npm run prisma:generate`
 - `npm run prisma:migrate`
+- `npx prisma migrate deploy` (bring a deployed database up to date; run it before deploying a version whose code reads new tables or columns)
 - `npm run prisma:studio`

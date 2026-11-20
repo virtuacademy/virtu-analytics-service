@@ -95,6 +95,11 @@ function worker(result, options = {}) {
       },
     },
     "@/lib/bookingSource": loadRoute("../src/lib/bookingSource.ts", {}),
+    "@/lib/qstash": {
+      enqueuePlatformRetry: () => {
+        throw new Error("Nothing here is too recent for Google");
+      },
+    },
   };
   for (const [path, method] of [
     ["meta", "sendMetaCapi"],

@@ -6,7 +6,8 @@ import { sendHubSpotEvent } from "@/lib/outbound/hubspot";
 import { sendGoogleAdsClickConversion } from "@/lib/outbound/googleAds";
 import { sendTikTokEvent } from "@/lib/outbound/tiktok";
 import { sendOpenAIConversion, validateOpenAIConversion } from "@/lib/outbound/openai.mjs";
-import { bookingSourceFor, isOpusDeliveryEnabled } from "@/lib/bookingSource";
+import { bookingSourceFor, deliveryPlatformsSetting, isDeliveryEnabled } from "@/lib/bookingSource";
+import { enqueuePlatformRetry } from "@/lib/qstash";
 
 export const runtime = "nodejs";
 
@@ -35,6 +36,49 @@ function isTransientStatus(status: number): boolean {
 // Platforms whose temporary failures are retried through QStash. A thrown error (for example a
 // network failure) counts as temporary too.
 const RETRIED_PLATFORMS = new Set(["OPENAI", "GOOGLE_ADS", "HUBSPOT"]);
+
+// Google refuses an upload while its click, or a newly created conversion action, is under six
+// hours old (TOO_RECENT_EVENT, TOO_RECENT_CONVERSION_ACTION: "Retry after 6 hours have
+// passed"). Uploads go at once all the same, because that refusal is rare. A delivery that
+// does get it stays PENDING and is tried again by one later message that names Google Ads,
+// this long after the refused attempt and at most this many times.
+const TOO_RECENT_RETRY_DELAY_MS = 375 * 60 * 1000;
+const TOO_RECENT_MAX_RETRIES = 4;
+// The start of the responseBody of a delivery waiting for such a retry, followed by the
+// retry's number ("TOO_RECENT_RETRY 2/4 …"). Only existing Delivery columns carry this state.
+const TOO_RECENT_MARKER = "TOO_RECENT_RETRY ";
+// Any other run for the event (a queue retry for another platform, a resend) leaves a waiting
+// delivery alone until this long after its last attempt, so it cannot use up the retries. It
+// is a little less than the delay, so the delivery's own message never comes too early by
+// this server's clock.
+const TOO_RECENT_WAIT_MS = TOO_RECENT_RETRY_DELAY_MS - 5 * 60 * 1000;
+
+// How many too-recent retries a delivery has been given so far, read from its marker.
+function tooRecentRetriesOf(responseBody: string | null): number {
+  const match = responseBody?.match(/^TOO_RECENT_RETRY (\d+)\//);
+  return match ? Number(match[1]) : 0;
+}
+
+// The marker to keep at the start of a delivery's responseBody when it fails for another
+// reason (an outage, a rate limit, a thrown error), so the retries it has used are not
+// forgotten and the next too-recent answer continues the count instead of starting over.
+function tooRecentCountToKeep(responseBody: string | null): string {
+  const retries = tooRecentRetriesOf(responseBody);
+  return retries > 0 ? `${TOO_RECENT_MARKER}${retries}/${TOO_RECENT_MAX_RETRIES} used. ` : "";
+}
+
+function isWaitingForTooRecentRetry(delivery: {
+  status: string;
+  responseBody: string | null;
+  lastAttemptAt: Date | null;
+}): boolean {
+  return (
+    delivery.status === "PENDING" &&
+    Boolean(delivery.responseBody?.startsWith(TOO_RECENT_MARKER)) &&
+    delivery.lastAttemptAt !== null &&
+    Date.now() - delivery.lastAttemptAt.getTime() < TOO_RECENT_WAIT_MS
+  );
+}
 
 // A page address without its query string or fragment.
 function originAndPath(url: string): string {
@@ -119,11 +163,17 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // A message names an event, and may name one platform: the later retry of an upload Google
+  // refused as too recent. Such a run touches only that platform's deliveries, so it cannot
+  // send another platform's failed delivery a second time (a HubSpot event has no idempotency
+  // key). Nothing else is accepted.
   const canonicalEventId = message.canonicalEventId;
+  const scope = message.platform;
   if (
     typeof canonicalEventId !== "string" ||
     !canonicalEventId.trim() ||
-    message.kind !== undefined
+    (scope !== undefined && scope !== "GOOGLE_ADS") ||
+    Object.keys(message).some((key) => key !== "canonicalEventId" && key !== "platform")
   ) {
     return NextResponse.json({ ok: false, error: "Invalid delivery message" }, { status: 400 });
   }
@@ -134,22 +184,31 @@ export async function POST(req: NextRequest) {
   });
   if (!ce)
     return NextResponse.json({ ok: false, error: "Missing canonical event" }, { status: 404 });
+  const deliveries = scope ? ce.deliveries.filter((d) => d.platform === scope) : ce.deliveries;
 
   const appt = ce.appointmentId
     ? await prisma.appointment.findUnique({ where: { id: ce.appointmentId } })
     : null;
+  // A booking keeps its contact details on the appointment. Only an event with no appointment
+  // (an account created, a callback requested) has an EventContact row, and only then is that
+  // table read: delivering a booking must never depend on it.
+  const eventContact = ce.appointmentId
+    ? null
+    : await prisma.eventContact.findUnique({ where: { canonicalEventId: ce.id } });
+  const contact = appt ?? eventContact;
   const scheduledBy = appt?.scheduledBy?.trim() ?? "";
   const source = bookingSourceFor(ce.appointmentId ?? ce.eventId);
 
-  if (scheduledBy) {
-    const staffBooking =
-      source === "opus"
+  if (scheduledBy || eventContact?.staffInitiated) {
+    const staffBooking = !appt
+      ? { reason: "created by Forte staff in Opus", skipReason: "created_by_opus_staff" }
+      : source === "opus"
         ? { reason: "booked by Forte staff in Opus", skipReason: "scheduled_by_opus_staff" }
         : {
             reason: "appointment scheduled by logged-in Acuity user",
             skipReason: "scheduled_by_acuity_user",
           };
-    for (const d of ce.deliveries) {
+    for (const d of deliveries) {
       if (d.status === "SUCCESS" || d.status === "SKIPPED") continue;
 
       await prisma.delivery.update({
@@ -158,7 +217,7 @@ export async function POST(req: NextRequest) {
           status: "SKIPPED",
           attempts: { increment: 1 },
           lastAttemptAt: new Date(),
-          responseBody: `Skipped outbound: ${staffBooking.reason} (${scheduledBy})`,
+          responseBody: `Skipped outbound: ${staffBooking.reason}${scheduledBy ? ` (${scheduledBy})` : ""}`,
         },
       });
     }
@@ -181,18 +240,21 @@ export async function POST(req: NextRequest) {
 
   const eventSourceUrl = attrib?.lastUrl ?? "https://virtu.academy";
   const eventId = ce.appointmentId ?? ce.eventId;
-  const email = appt?.email ?? null;
-  const phone = appt?.phone ?? null;
-  // Opus bookings have no ingest session; their IP and user agent arrive on the Attribution row.
-  // Acuity sends keep using the session only.
-  const opusAttrib = source === "opus" ? attrib : null;
-  const ip = session?.ipFirst ?? opusAttrib?.ipAddress ?? null;
-  const userAgent = session?.uaFirst ?? opusAttrib?.userAgent ?? null;
+  const email = contact?.email ?? null;
+  const phone = contact?.phone ?? null;
+  // An Opus or page event's own Attribution row carries an IP and user agent, for when it has
+  // no ingest session or the session lacks one. Acuity sends keep using the session only.
+  const ownAttrib = source === "acuity" ? null : attrib;
+  const ip = session?.ipFirst ?? ownAttrib?.ipAddress ?? null;
+  const userAgent = session?.uaFirst ?? ownAttrib?.userAgent ?? null;
   const mockOutbound = process.env.OUTBOUND_MODE === "mock";
+  // Opus and page events may only reach the platforms their setting lists; Acuity has none.
+  const platformsSetting = deliveryPlatformsSetting(source);
   let retry = false;
 
-  for (const d of ce.deliveries) {
+  for (const d of deliveries) {
     if (d.status === "SUCCESS" || d.status === "SKIPPED") continue;
+    if (isWaitingForTooRecentRetry(d)) continue;
 
     const mark = async (patch: {
       status: "SUCCESS" | "FAILED" | "SKIPPED";
@@ -200,6 +262,8 @@ export async function POST(req: NextRequest) {
       responseBody?: string;
       requestBody?: string;
     }) => {
+      // A failed delivery may be tried again, so it keeps its count of too-recent retries.
+      const kept = patch.status === "FAILED" ? tooRecentCountToKeep(d.responseBody) : "";
       await prisma.delivery.update({
         where: { id: d.id },
         data: {
@@ -207,20 +271,18 @@ export async function POST(req: NextRequest) {
           attempts: { increment: 1 },
           lastAttemptAt: new Date(),
           responseCode: patch.responseCode,
-          responseBody: patch.responseBody,
+          responseBody: kept ? `${kept}${patch.responseBody ?? ""}` : patch.responseBody,
           requestBody: patch.requestBody,
         },
       });
     };
 
-    // Opus bookings may only reach the platforms enabled now, whatever rows exist.
-    if (
-      source === "opus" &&
-      !isOpusDeliveryEnabled(d.platform, process.env.OPUS_DELIVERY_PLATFORMS)
-    ) {
+    // Opus and page events may only reach the platforms enabled now, whatever rows exist.
+    if (platformsSetting && !isDeliveryEnabled(d.platform, process.env[platformsSetting])) {
+      const sourceName = source === "opus" ? "Opus" : "Page";
       await mark({
         status: "SKIPPED",
-        responseBody: `Opus delivery to ${d.platform} is off (not an Opus platform, or not listed in OPUS_DELIVERY_PLATFORMS)`,
+        responseBody: `${sourceName} delivery to ${d.platform} is off (not ${source === "opus" ? "an Opus" : "a page"} platform, or not listed in ${platformsSetting})`,
       });
       continue;
     }
@@ -259,14 +321,14 @@ export async function POST(req: NextRequest) {
             eventId,
             eventName: ce.name,
             eventTime: ce.eventTime,
-            // An Opus booking's page address goes without its query string and fragment: the
-            // click ID and UTMs travel in their own fields, and a landing link can carry
+            // An Opus or page event's page address goes without its query string and fragment:
+            // the click ID and UTMs travel in their own fields, and a landing link can carry
             // personal details. Acuity sends keep the address as stored.
-            eventSourceUrl: source === "opus" ? originAndPath(eventSourceUrl) : eventSourceUrl,
+            eventSourceUrl: source === "acuity" ? eventSourceUrl : originAndPath(eventSourceUrl),
             email,
             phone,
-            firstName: appt?.firstName ?? null,
-            lastName: appt?.lastName ?? null,
+            firstName: contact?.firstName ?? null,
+            lastName: contact?.lastName ?? null,
             ip,
             userAgent,
             fbc: appt?.fbc ?? attrib?.fbc ?? null,
@@ -275,8 +337,12 @@ export async function POST(req: NextRequest) {
             value: ce.value ?? null,
             currency: ce.currency ?? null,
             customData: {
-              appointment_id: ce.appointmentId,
-              appointment_type_id: appt?.appointmentTypeId ?? null,
+              ...(ce.appointmentId
+                ? {
+                    appointment_id: ce.appointmentId,
+                    appointment_type_id: appt?.appointmentTypeId ?? null,
+                  }
+                : {}),
               utm_campaign: attrib?.utmCampaign ?? null,
               utm_source: attrib?.utmSource ?? null,
               utm_medium: attrib?.utmMedium ?? null,
@@ -349,13 +415,53 @@ export async function POST(req: NextRequest) {
             gclid: appt?.gclid ?? attrib?.gclid ?? null,
             email,
             phone,
-            firstName: appt?.firstName ?? null,
-            lastName: appt?.lastName ?? null,
+            firstName: contact?.firstName ?? null,
+            lastName: contact?.lastName ?? null,
             userIpAddress: ip,
             source,
           });
           if (r.skipped) {
             await mark({ status: "SKIPPED", responseBody: r.reason });
+          } else if (!r.ok && r.tooRecent) {
+            // Waiting is all this upload needs. Whatever happens here, the run is done with
+            // it: the queue is not asked to retry this message.
+            const retries = tooRecentRetriesOf(d.responseBody);
+            const attemptedAt = new Date();
+            const retryAt = new Date(attemptedAt.getTime() + TOO_RECENT_RETRY_DELAY_MS);
+            let failure: string | null = null;
+            if (retries >= TOO_RECENT_MAX_RETRIES) {
+              failure = `Still too recent for Google after ${TOO_RECENT_MAX_RETRIES} retries.`;
+            } else {
+              try {
+                await enqueuePlatformRetry(ce.id, "GOOGLE_ADS", retryAt);
+              } catch {
+                console.error(
+                  "Delivery worker: could not queue the retry of a too-recent Google Ads upload",
+                  { canonicalEventId: ce.id },
+                );
+                failure = "Too recent for Google, and its retry could not be queued.";
+              }
+            }
+            if (failure) {
+              await mark({
+                status: "FAILED",
+                responseCode: r.status,
+                responseBody: `${failure} ${r.body}`,
+                requestBody: r.requestBody,
+              });
+            } else {
+              await prisma.delivery.update({
+                where: { id: d.id },
+                data: {
+                  status: "PENDING",
+                  attempts: { increment: 1 },
+                  lastAttemptAt: attemptedAt,
+                  responseCode: r.status,
+                  responseBody: `${TOO_RECENT_MARKER}${retries + 1}/${TOO_RECENT_MAX_RETRIES} after ${retryAt.toISOString()}. ${r.body}`,
+                  requestBody: r.requestBody,
+                },
+              });
+            }
           } else {
             // A validate-only upload is checked by Google but records no conversion.
             const validatedOnly = r.ok && r.validateOnly;
