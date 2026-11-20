@@ -27,7 +27,9 @@ fortelessons.com repo) is the only sender. Change both sides together.
 - `contact` is what the visitor typed into the callback form. Every field may be `null`, blank
   or left out, and so may `contact` itself. Limits: `email` 254 characters, `phone` 40,
   `firstName` 100. Send them as typed; this service normalizes and hashes them for each
-  platform.
+  platform. White space around a value is dropped. A value that holds a control character (a
+  NUL, a line break inside it) or half of a surrogate pair is outside the contract: the request
+  is answered 400 before any database work.
 - The whole body may be at most 2048 characters. Unknown fields are ignored.
 
 The call is best effort. Send it after the form succeeded, do not wait for it, and never show

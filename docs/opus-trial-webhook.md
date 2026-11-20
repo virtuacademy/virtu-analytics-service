@@ -418,7 +418,10 @@ Google actually refuses this way is tried again later:
   10 minutes after `lastAttemptAt`: five minutes less than the delay, so the delivery's own
   message never comes too early by this server's clock.
 - **At most four retries.** If Google still calls the fourth too recent, the delivery is
-  `FAILED`.
+  `FAILED`. The count survives other failures: a delivery that fails for another reason in
+  between (an outage, a rate limit, a thrown error) keeps `TOO_RECENT_RETRY n/4 used.` at the
+  start of its `responseBody`, and so does one that failed at the limit, so a later run cannot
+  start a new round.
 - **If the later message cannot be queued,** the delivery is `FAILED` with that reason and an
   error is logged.
 - **The queue is not asked to retry** the message that got the answer: the worker answers 200.
