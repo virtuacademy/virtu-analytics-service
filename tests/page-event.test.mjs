@@ -12,8 +12,11 @@ const zod = require("zod");
 
 const PAGE = "https://lessons.virtu.academy";
 const VISIT = "0b6c5a1e-3f4d-4c2b-9a8e-7d6f5e4c3b2a";
+const CALLER_IP = "203.0.113.7";
 const HOLD_MS = 375 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const minutesAgo = (minutes) => new Date(Date.now() - minutes * 60 * 1000);
+const on = { PAGE_DELIVERY_PLATFORMS: "GOOGLE_ADS,META" };
 
 // A visit that came from a Google ad long enough ago for Google to accept an upload.
 const visitRow = {
@@ -36,10 +39,13 @@ const callback = (overrides = {}) => ({
   ...overrides,
 });
 
+// `options.earlier` is an event this visit already reported in the window; `fromThisAddress`
+// and `fromEveryone` are how many delivered page events the window already holds.
 function endpoint(options = {}) {
   const committed = [];
   const queued = [];
-  // What the transaction did, in order: the lock, then the 24-hour lookup.
+  const errors = [];
+  // What the transaction did before writing, in order, with what it asked for.
   const steps = [];
   const env = { ALLOWED_ORIGINS: `https://virtu.academy,${PAGE}`, ...options.env };
   const lib = (file, dependencies = {}) =>
@@ -50,28 +56,33 @@ function endpoint(options = {}) {
     writes.push({ table, data: args.data });
     return result;
   };
+  const asked = (step, result) => async (args) => {
+    steps.push([step, args?.where]);
+    return result;
+  };
   const prisma = {
     attribution: {
       findUnique: async ({ where }) =>
         (options.visits ?? { [VISIT]: visitRow })[where.token] ?? null,
     },
     // Writes become visible only when the callback resolves, like a rolled-back transaction.
-    $transaction: async (callback) => {
+    $transaction: async (run) => {
       const writes = [];
-      const result = await callback({
-        $queryRaw: async (_sql, token) => {
-          steps.push(["lock", token]);
-          return [];
+      const result = await run({
+        $executeRaw: async (sql) => {
+          steps.push(["lock", sql.join("")]);
+          return 1;
         },
         eventContact: {
-          findFirst: async ({ where }) => {
-            steps.push(["lookup", where]);
-            return options.earlier ?? null;
-          },
+          findFirst: asked("sameVisit", options.earlier ?? null),
+          count: asked("sameAddress", options.fromThisAddress ?? 0),
           create: write(writes, "eventContact"),
         },
         attribution: { create: write(writes, "attribution") },
-        canonicalEvent: { create: write(writes, "canonicalEvent", { id: "ce_1" }) },
+        canonicalEvent: {
+          count: asked("everyone", options.fromEveryone ?? 0),
+          create: write(writes, "canonicalEvent", { id: "ce_1" }),
+        },
         delivery: { createMany: write(writes, "delivery") },
       });
       committed.push(...writes);
@@ -92,31 +103,44 @@ function endpoint(options = {}) {
         crypto: nodeCrypto,
       }),
       "@/lib/cors": lib("cors.ts"),
+      "@/lib/clientIp": lib("clientIp.ts"),
       "@/lib/attribToken": lib("attribToken.ts"),
       "@/lib/bookingSource": lib("bookingSource.ts"),
       "@/lib/adEvents": lib("adEvents.ts"),
       "@/lib/googleAdsHold": lib("googleAdsHold.ts"),
       "@/lib/qstash": { queueDeliveries: async (id) => queued.push(id) },
     },
-    { process: { env } },
+    { process: { env }, console: { error: (...line) => errors.push(line) } },
   );
-  const send = (body, origin = PAGE) => {
+  const send = (body, origin = PAGE, headers = { "x-forwarded-for": `${CALLER_IP}, 10.0.0.1` }) => {
     const raw = typeof body === "string" ? body : JSON.stringify(body);
-    return POST({ text: async () => raw, headers: new Headers(origin ? { origin } : {}) });
+    return POST({
+      text: async () => raw,
+      headers: new Headers({ ...headers, ...(origin ? { origin } : {}) }),
+    });
   };
   const rows = (table) => committed.filter((w) => w.table === table).map((w) => w.data);
-  return { send, committed, queued, rows, steps };
+  const whereOf = (step) => steps.find(([name]) => name === step)?.[1];
+  return { send, committed, queued, errors, rows, steps, whereOf };
 }
 
 const statuses = (e) => Array.from(e.rows("delivery")[0], (d) => [d.platform, d.status]);
+const delivered = [
+  ["GOOGLE_ADS", "PENDING"],
+  ["META", "PENDING"],
+];
+// Every delivery row is SKIPPED for the same reason, and nothing is queued.
+function assertNotDelivered(e, reason) {
+  assert.equal(e.rows("canonicalEvent").length, 1);
+  for (const delivery of e.rows("delivery")[0]) {
+    assert.equal(delivery.status, "SKIPPED");
+    assert.match(delivery.responseBody, reason);
+  }
+  assert.equal(e.queued.length, 0);
+}
 
 test("a callback from the page is recorded as its own event and queued for Google Ads and Meta", async () => {
-  const e = endpoint({
-    env: {
-      PAGE_DELIVERY_PLATFORMS: "GOOGLE_ADS,META",
-      EVENT_VALUES: "page:CALLBACK_REQUESTED=15",
-    },
-  });
+  const e = endpoint({ env: { ...on, EVENT_VALUES: "page:CALLBACK_REQUESTED=15" } });
   const response = await e.send(callback());
   assert.equal(response.status, 200);
   // Nothing the caller sent, and no ID, comes back.
@@ -146,28 +170,24 @@ test("a callback from the page is recorded as its own event and queued for Googl
       phone: "(555) 555-0123",
       firstName: "Pat",
       vaAttrib: VISIT,
+      // The first forwarded address, as ingest takes it.
+      ipAddress: CALLER_IP,
     },
   );
 
-  assert.deepEqual(statuses(e), [
-    ["GOOGLE_ADS", "PENDING"],
-    ["META", "PENDING"],
-  ]);
+  assert.deepEqual(statuses(e), delivered);
   // The click is over six hours old, so nothing waits.
   assert.equal(e.rows("delivery")[0][0].notBefore, null);
   assert.deepEqual(e.queued, ["ce_1"]);
+  assert.equal(e.errors.length, 0);
 });
 
 test("page deliveries stay off until PAGE_DELIVERY_PLATFORMS lists the platform", async () => {
   // The Opus setting says nothing about page events.
   const e = endpoint({ env: { OPUS_DELIVERY_PLATFORMS: "GOOGLE_ADS,HUBSPOT,META" } });
   assert.equal((await e.send(callback())).status, 200);
-  for (const delivery of e.rows("delivery")[0]) {
-    assert.equal(delivery.status, "SKIPPED");
-    assert.match(delivery.responseBody, /PAGE_DELIVERY_PLATFORMS/);
-  }
+  assertNotDelivered(e, /PAGE_DELIVERY_PLATFORMS/);
   assert.equal(e.rows("canonicalEvent")[0].value, null);
-  assert.equal(e.queued.length, 0);
 });
 
 test("an unknown visit, another site and a body outside the contract are refused without writes", async () => {
@@ -181,10 +201,11 @@ test("an unknown visit, another site and a body outside the contract are refused
     ["an over-long email", callback({ contact: { email: `${"x".repeat(250)}@a.co` } }), PAGE, 400],
     ["not JSON", "callback", PAGE, 400],
     ["an oversized body", callback({ notes: "x".repeat(3000) }), PAGE, 413],
-    ["a site that is not allowed", callback(), "https://example.com", 403],
+    // Keeps honest browsers on other sites out. A script can send any Origin.
+    ["a site that is not listed", callback(), "https://example.com", 403],
     ["no Origin header", callback(), null, 403],
   ]) {
-    const e = endpoint({ env: { PAGE_DELIVERY_PLATFORMS: "GOOGLE_ADS,META" } });
+    const e = endpoint({ env: on });
     const response = await e.send(body, origin);
     assert.equal(response.status, status, name);
     assert.equal(response.body.ok, false, name);
@@ -195,39 +216,104 @@ test("an unknown visit, another site and a body outside the contract are refused
 });
 
 test("a second callback for the same visit within 24 hours is recorded but not delivered", async () => {
-  const e = endpoint({
-    env: { PAGE_DELIVERY_PLATFORMS: "GOOGLE_ADS,META" },
-    earlier: { canonicalEventId: "ce_earlier" },
-  });
+  const e = endpoint({ env: on, earlier: { canonicalEventId: "ce_earlier" } });
   const before = Date.now();
   assert.equal((await e.send(callback())).status, 200);
+  assertNotDelivered(e, /^Duplicate/);
 
-  assert.equal(e.rows("canonicalEvent").length, 1);
-  for (const delivery of e.rows("delivery")[0]) {
-    assert.equal(delivery.status, "SKIPPED");
-    assert.match(delivery.responseBody, /^Duplicate/);
-  }
-  assert.equal(e.queued.length, 0);
-
-  // Requests for one visit take turns before the lookup, so two cannot both pass it.
+  // Page events are checked one at a time, so two requests cannot both pass a check.
   assert.deepEqual(
     e.steps.map(([step]) => step),
-    ["lock", "lookup"],
+    ["lock", "sameVisit", "sameAddress", "everyone"],
   );
-  assert.equal(e.steps[0][1], VISIT);
-  const where = e.steps[1][1];
+  assert.match(e.steps[0][1], /pg_advisory_xact_lock/);
+  const where = e.whereOf("sameVisit");
   assert.equal(where.vaAttrib, VISIT);
   assert.equal(where.canonicalEvent.name, "CALLBACK_REQUESTED");
-  const since = where.canonicalEvent.eventTime.gt.getTime();
-  assert.ok(Math.abs(since - (before - 24 * 60 * 60 * 1000)) < 5_000);
+  assert.ok(Math.abs(where.canonicalEvent.eventTime.gt.getTime() - (before - DAY_MS)) < 5_000);
+});
+
+test("a visit not seen in the last 24 hours cannot report an event that is delivered", async () => {
+  const visited = (minutes) => ({ [VISIT]: { ...visitRow, lastTouchAt: minutesAgo(minutes) } });
+  const stale = endpoint({ env: on, visits: visited(25 * 60) });
+  assert.equal((await stale.send(callback())).status, 200);
+  assertNotDelivered(stale, /^Stale visit/);
+
+  const recent = endpoint({ env: on, visits: visited(23 * 60) });
+  await recent.send(callback());
+  assert.deepEqual(statuses(recent), delivered);
+});
+
+test("one IP address gets a few delivered callbacks a day, and the rest are only recorded", async () => {
+  const before = Date.now();
+  const capped = endpoint({ env: on, fromThisAddress: 3 });
+  assert.equal((await capped.send(callback())).status, 200);
+  assertNotDelivered(capped, /^Limit reached: 3 .* one IP address .*PAGE_EVENT_DAILY_LIMIT_PER_IP/);
+  assert.match(
+    capped.errors[0][0],
+    /^\[page-events\] limit reached \(PAGE_EVENT_DAILY_LIMIT_PER_IP\)/,
+  );
+
+  // Counted: this caller's events of the last 24 hours that were accepted for delivery.
+  const where = capped.whereOf("sameAddress");
+  assert.equal(where.ipAddress, CALLER_IP);
+  assert.equal(where.canonicalEvent.name, "CALLBACK_REQUESTED");
+  assert.ok(Math.abs(where.canonicalEvent.eventTime.gt.getTime() - (before - DAY_MS)) < 5_000);
+  assert.deepEqual(JSON.parse(JSON.stringify(where.canonicalEvent.deliveries)), {
+    some: { status: { not: "SKIPPED" } },
+  });
+
+  const under = endpoint({ env: on, fromThisAddress: 2 });
+  await under.send(callback());
+  assert.deepEqual(statuses(under), delivered);
+
+  // The setting moves the limit; requests with no address share one allowance.
+  const raised = endpoint({
+    env: { ...on, PAGE_EVENT_DAILY_LIMIT_PER_IP: "5" },
+    fromThisAddress: 3,
+  });
+  await raised.send(callback());
+  assert.deepEqual(statuses(raised), delivered);
+  const noAddress = endpoint({ env: on });
+  await noAddress.send(callback(), PAGE, {});
+  assert.equal(noAddress.whereOf("sameAddress").ipAddress, null);
+  assert.equal(noAddress.rows("eventContact")[0].ipAddress, null);
+});
+
+test("past the daily limit for all visitors, events are recorded, not delivered, and logged", async () => {
+  const tripped = endpoint({ env: on, fromEveryone: 25 });
+  assert.equal((await tripped.send(callback())).status, 200);
+  assertNotDelivered(tripped, /^Limit reached: 25 .*PAGE_EVENT_DAILY_LIMIT\)/);
+  // The line monitoring looks for.
+  assert.equal(tripped.errors.length, 1);
+  assert.match(tripped.errors[0][0], /^\[page-events\] limit reached \(PAGE_EVENT_DAILY_LIMIT\)/);
+  // Nothing of the caller's in the log line.
+  assert.equal(JSON.stringify(tripped.errors).includes("parent@example.com"), false);
+
+  // Counted: every page event of the last 24 hours that was accepted for delivery.
+  const where = tripped.whereOf("everyone");
+  assert.deepEqual(JSON.parse(JSON.stringify(where.name)), { in: ["CALLBACK_REQUESTED"] });
+  assert.deepEqual(JSON.parse(JSON.stringify(where.deliveries)), {
+    some: { status: { not: "SKIPPED" } },
+  });
+
+  const under = endpoint({ env: on, fromEveryone: 24 });
+  await under.send(callback());
+  assert.deepEqual(statuses(under), delivered);
+  assert.equal(under.errors.length, 0);
+
+  // The setting moves the limit, and 0 delivers nothing at all.
+  const lowered = endpoint({ env: { ...on, PAGE_EVENT_DAILY_LIMIT: "2" }, fromEveryone: 2 });
+  await lowered.send(callback());
+  assertNotDelivered(lowered, /^Limit reached: 2 /);
+  const closed = endpoint({ env: { ...on, PAGE_EVENT_DAILY_LIMIT: "0" } });
+  await closed.send(callback());
+  assertNotDelivered(closed, /^Limit reached: 0 /);
 });
 
 test("a callback minutes after the ad click holds its Google Ads delivery", async () => {
   const lastTouchAt = minutesAgo(4);
-  const e = endpoint({
-    env: { PAGE_DELIVERY_PLATFORMS: "GOOGLE_ADS,META" },
-    visits: { [VISIT]: { ...visitRow, lastTouchAt } },
-  });
+  const e = endpoint({ env: on, visits: { [VISIT]: { ...visitRow, lastTouchAt } } });
   await e.send(callback());
   const [google, meta] = e.rows("delivery")[0];
   assert.equal(google.notBefore.getTime(), lastTouchAt.getTime() + HOLD_MS);
@@ -236,22 +322,14 @@ test("a callback minutes after the ad click holds its Google Ads delivery", asyn
 });
 
 test("a callback with no click ID and no email or phone is recorded but not delivered", async () => {
-  const env = { PAGE_DELIVERY_PLATFORMS: "GOOGLE_ADS,META" };
   const organic = { [VISIT]: { ...visitRow, gclid: null } };
 
-  const nothing = endpoint({ env, visits: organic });
+  const nothing = endpoint({ env: on, visits: organic });
   await nothing.send(callback({ contact: { email: " ", firstName: "Pat" } }));
-  for (const delivery of nothing.rows("delivery")[0]) {
-    assert.equal(delivery.status, "SKIPPED");
-    assert.match(delivery.responseBody, /No click ID and no contact details/);
-  }
-  assert.equal(nothing.queued.length, 0);
+  assertNotDelivered(nothing, /No click ID and no contact details/);
 
   // The form's email is enough for a visitor no ad click identifies.
-  const withEmail = endpoint({ env, visits: organic });
+  const withEmail = endpoint({ env: on, visits: organic });
   await withEmail.send(callback());
-  assert.deepEqual(statuses(withEmail), [
-    ["GOOGLE_ADS", "PENDING"],
-    ["META", "PENDING"],
-  ]);
+  assert.deepEqual(statuses(withEmail), delivered);
 });

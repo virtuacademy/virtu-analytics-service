@@ -31,6 +31,7 @@ async function ingest({ cookies = {}, body = {}, origin } = {}) {
       "next/server": nextServer,
       "@/lib/crypto": { randomId: () => crypto.randomUUID() },
       "@/lib/cors": { withCors: (res) => res },
+      "@/lib/clientIp": loadTsModule(new URL("../src/lib/clientIp.ts", import.meta.url), {}),
       "@/lib/cookies": {
         setCookie: recordCookie,
         setReadableCookie: recordCookie,

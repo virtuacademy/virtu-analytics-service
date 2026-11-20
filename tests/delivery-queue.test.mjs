@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { loadTsModule } from "./support/load-ts-module.mjs";
 
-// The real queue helper (src/lib/qstash.ts) against a stubbed QStash client and database.
+// The real queue helper (src/lib/qstash.ts) against a stubbed QStash client and database, and
+// the hold an Acuity booking's Google Ads delivery starts with.
 
 const inMinutes = (minutes) => new Date(Date.now() + minutes * 60 * 1000);
 
@@ -72,4 +73,75 @@ test("a held delivery that cannot be scheduled is released and sent now", async 
   ]);
   assert.equal(q.published.length, 1);
   assert.equal(q.published[0].notBefore, undefined);
+});
+
+// Runs the real Acuity webhook for a self-scheduled trial. `visit` is the ingest row its
+// va_attrib intake value names, if any.
+async function acuityBooking(visit) {
+  const VISIT = "0b6c5a1e-3f4d-4c2b-9a8e-7d6f5e4c3b2a";
+  const env = {
+    ACUITY_API_KEY: "synthetic",
+    ACUITY_FIELD_VA_ATTRIB_ID: "111",
+    ACUITY_TRIAL_APPOINTMENT_TYPE_IDS: "456",
+  };
+  const deliveries = [];
+  const queued = [];
+  const lib = (file) =>
+    loadTsModule(new URL(`../src/lib/${file}`, import.meta.url), {}, { process: { env } });
+  const { POST } = loadTsModule(
+    new URL("../src/app/api/webhooks/acuity/route.ts", import.meta.url),
+    {
+      "next/server": {
+        NextResponse: { json: (body, init) => ({ body, status: init?.status ?? 200 }) },
+      },
+      "@/lib/auth": { timingSafeEqual: () => true },
+      "@/lib/crypto": { sha256Base64: () => "sig", sha256Hex: () => "hash" },
+      "@/lib/acuity": {
+        fetchAppointmentById: async () => ({ id: 123, appointmentTypeID: 456 }),
+        extractIntakeValue: (_appt, fieldId) => (visit && fieldId === 111 ? VISIT : null),
+        appointmentSnapshot: () => ({ scheduledBy: null }),
+      },
+      "@/lib/qstash": { queueDeliveries: async (id) => queued.push(id) },
+      "@/lib/bookingSource": lib("bookingSource.ts"),
+      "@/lib/googleAdsHold": lib("googleAdsHold.ts"),
+      "@/lib/prisma": {
+        prisma: {
+          inboundWebhook: { create: async () => {} },
+          appointment: { upsert: async () => {} },
+          attribution: { findUnique: async ({ where }) => (where.token === VISIT ? visit : null) },
+          canonicalEvent: { create: async () => ({ id: "ce_1" }), findFirst: async () => null },
+          delivery: { createMany: async ({ data }) => deliveries.push(...data) },
+        },
+      },
+    },
+    { process: { env } },
+  );
+  await POST({
+    headers: new Headers({ "x-acuity-signature": "sig" }),
+    text: async () => "action=scheduled&id=123",
+  });
+  return { deliveries, queued };
+}
+
+test("an Acuity booking made minutes after the ad click holds only its Google Ads delivery", async () => {
+  const HOLD_MS = 375 * 60 * 1000;
+  const notBeforeOf = (booking, platform) =>
+    booking.deliveries.find((delivery) => delivery.platform === platform).notBefore;
+
+  const lastTouchAt = inMinutes(-6);
+  const fresh = await acuityBooking({ lastTouchAt });
+  assert.equal(notBeforeOf(fresh, "GOOGLE_ADS").getTime(), lastTouchAt.getTime() + HOLD_MS);
+  for (const platform of ["META", "HUBSPOT", "TIKTOK", "OPENAI"]) {
+    assert.equal(notBeforeOf(fresh, platform), undefined, platform);
+  }
+  assert.deepEqual(fresh.queued, ["ce_1"]);
+
+  // A visitor who came back days after the click is not kept waiting.
+  const returning = await acuityBooking({ lastTouchAt: inMinutes(-400) });
+  assert.equal(notBeforeOf(returning, "GOOGLE_ADS"), null);
+
+  // No linked visit: the click is no later than the booking itself.
+  const before = Date.now();
+  const unlinked = await acuityBooking(null);
+  assert.ok(notBeforeOf(unlinked, "GOOGLE_ADS").getTime() >= before + HOLD_MS);
 });
