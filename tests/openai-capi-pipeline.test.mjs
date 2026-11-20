@@ -95,10 +95,9 @@ function worker(result, options = {}) {
       },
     },
     "@/lib/bookingSource": loadRoute("../src/lib/bookingSource.ts", {}),
-    "@/lib/googleAdsHold": loadRoute("../src/lib/googleAdsHold.ts", {}),
     "@/lib/qstash": {
-      enqueueDelivery: () => {
-        throw new Error("Nothing here is held or put back");
+      enqueuePlatformRetry: () => {
+        throw new Error("Nothing here is too recent for Google");
       },
     },
   };
@@ -231,9 +230,8 @@ test("Acuity changed queues first bookings, skips historical edits, and keeps st
         extractIntakeValue: () => null,
         appointmentSnapshot: () => ({ scheduledBy: staff ? "staff" : null }),
       },
-      "@/lib/qstash": { queueDeliveries: async (id) => queued.push(id) },
+      "@/lib/qstash": { enqueueDelivery: async (id) => queued.push(id) },
       "@/lib/bookingSource": loadRoute("../src/lib/bookingSource.ts", {}),
-      "@/lib/googleAdsHold": loadRoute("../src/lib/googleAdsHold.ts", {}),
       "@/lib/prisma": {
         prisma: {
           inboundWebhook: { create: async () => {} },

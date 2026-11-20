@@ -7,8 +7,7 @@ import { sendGoogleAdsClickConversion } from "@/lib/outbound/googleAds";
 import { sendTikTokEvent } from "@/lib/outbound/tiktok";
 import { sendOpenAIConversion, validateOpenAIConversion } from "@/lib/outbound/openai.mjs";
 import { bookingSourceFor, deliveryPlatformsSetting, isDeliveryEnabled } from "@/lib/bookingSource";
-import { enqueueDelivery } from "@/lib/qstash";
-import { googleAdsRetryAfterTooRecent } from "@/lib/googleAdsHold";
+import { enqueuePlatformRetry } from "@/lib/qstash";
 
 export const runtime = "nodejs";
 
@@ -38,12 +37,40 @@ function isTransientStatus(status: number): boolean {
 // network failure) counts as temporary too.
 const RETRIED_PLATFORMS = new Set(["OPENAI", "GOOGLE_ADS", "HUBSPOT"]);
 
-// A held delivery (`Delivery.notBefore`) is left for the later message scheduled for it. The
-// tolerance covers a clock that differs from the queue's, so that message never finds its own
-// delivery still held.
-const HOLD_TOLERANCE_MS = 2 * 60 * 1000;
-// How often one delivery may be put back after Google called its click too recent.
-const TOO_RECENT_MAX_ATTEMPTS = 4;
+// Google refuses an upload while its click, or a newly created conversion action, is under six
+// hours old (TOO_RECENT_EVENT, TOO_RECENT_CONVERSION_ACTION: "Retry after 6 hours have
+// passed"). Uploads go at once all the same, because that refusal is rare. A delivery that
+// does get it stays PENDING and is tried again by one later message that names Google Ads,
+// this long after the refused attempt and at most this many times.
+const TOO_RECENT_RETRY_DELAY_MS = 375 * 60 * 1000;
+const TOO_RECENT_MAX_RETRIES = 4;
+// The start of the responseBody of a delivery waiting for such a retry, followed by the
+// retry's number ("TOO_RECENT_RETRY 2/4 …"). Only existing Delivery columns carry this state.
+const TOO_RECENT_MARKER = "TOO_RECENT_RETRY ";
+// Any other run for the event (a queue retry for another platform, a resend) leaves a waiting
+// delivery alone until this long after its last attempt, so it cannot use up the retries. It
+// is a little less than the delay, so the delivery's own message never comes too early by
+// this server's clock.
+const TOO_RECENT_WAIT_MS = TOO_RECENT_RETRY_DELAY_MS - 5 * 60 * 1000;
+
+// How many too-recent retries a delivery has been given so far, read from its marker.
+function tooRecentRetriesOf(responseBody: string | null): number {
+  const match = responseBody?.match(/^TOO_RECENT_RETRY (\d+)\//);
+  return match ? Number(match[1]) : 0;
+}
+
+function isWaitingForTooRecentRetry(delivery: {
+  status: string;
+  responseBody: string | null;
+  lastAttemptAt: Date | null;
+}): boolean {
+  return (
+    delivery.status === "PENDING" &&
+    Boolean(delivery.responseBody?.startsWith(TOO_RECENT_MARKER)) &&
+    delivery.lastAttemptAt !== null &&
+    Date.now() - delivery.lastAttemptAt.getTime() < TOO_RECENT_WAIT_MS
+  );
+}
 
 // A page address without its query string or fragment.
 function originAndPath(url: string): string {
@@ -128,32 +155,43 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // A message names an event, and may name one platform: the later retry of an upload Google
+  // refused as too recent. Such a run touches only that platform's deliveries, so it cannot
+  // send another platform's failed delivery a second time (a HubSpot event has no idempotency
+  // key). Nothing else is accepted.
   const canonicalEventId = message.canonicalEventId;
+  const scope = message.platform;
   if (
     typeof canonicalEventId !== "string" ||
     !canonicalEventId.trim() ||
-    message.kind !== undefined
+    (scope !== undefined && scope !== "GOOGLE_ADS") ||
+    Object.keys(message).some((key) => key !== "canonicalEventId" && key !== "platform")
   ) {
     return NextResponse.json({ ok: false, error: "Invalid delivery message" }, { status: 400 });
   }
 
   const ce = await prisma.canonicalEvent.findUnique({
     where: { id: canonicalEventId },
-    include: { deliveries: true, contact: true },
+    include: { deliveries: true },
   });
   if (!ce)
     return NextResponse.json({ ok: false, error: "Missing canonical event" }, { status: 404 });
+  const deliveries = scope ? ce.deliveries.filter((d) => d.platform === scope) : ce.deliveries;
 
   const appt = ce.appointmentId
     ? await prisma.appointment.findUnique({ where: { id: ce.appointmentId } })
     : null;
-  // A booking keeps its contact details on the appointment. An event that is not a booking (an
-  // account created, a callback requested) keeps them on its own row.
-  const contact = appt ?? ce.contact ?? null;
+  // A booking keeps its contact details on the appointment. Only an event with no appointment
+  // (an account created, a callback requested) has an EventContact row, and only then is that
+  // table read: delivering a booking must never depend on it.
+  const eventContact = ce.appointmentId
+    ? null
+    : await prisma.eventContact.findUnique({ where: { canonicalEventId: ce.id } });
+  const contact = appt ?? eventContact;
   const scheduledBy = appt?.scheduledBy?.trim() ?? "";
   const source = bookingSourceFor(ce.appointmentId ?? ce.eventId);
 
-  if (scheduledBy || ce.contact?.staffInitiated) {
+  if (scheduledBy || eventContact?.staffInitiated) {
     const staffBooking = !appt
       ? { reason: "created by Forte staff in Opus", skipReason: "created_by_opus_staff" }
       : source === "opus"
@@ -162,7 +200,7 @@ export async function POST(req: NextRequest) {
             reason: "appointment scheduled by logged-in Acuity user",
             skipReason: "scheduled_by_acuity_user",
           };
-    for (const d of ce.deliveries) {
+    for (const d of deliveries) {
       if (d.status === "SUCCESS" || d.status === "SKIPPED") continue;
 
       await prisma.delivery.update({
@@ -206,9 +244,9 @@ export async function POST(req: NextRequest) {
   const platformsSetting = deliveryPlatformsSetting(source);
   let retry = false;
 
-  for (const d of ce.deliveries) {
+  for (const d of deliveries) {
     if (d.status === "SUCCESS" || d.status === "SKIPPED") continue;
-    if (d.notBefore && d.notBefore.getTime() - Date.now() > HOLD_TOLERANCE_MS) continue;
+    if (isWaitingForTooRecentRetry(d)) continue;
 
     const mark = async (patch: {
       status: "SUCCESS" | "FAILED" | "SKIPPED";
@@ -374,24 +412,46 @@ export async function POST(req: NextRequest) {
           });
           if (r.skipped) {
             await mark({ status: "SKIPPED", responseBody: r.reason });
-          } else if (!r.ok && r.tooRecent && d.attempts < TOO_RECENT_MAX_ATTEMPTS) {
-            // The click is under six hours old. That is no failure: hold the delivery and
-            // upload again later. If the later message cannot be scheduled, the thrown error
-            // marks it FAILED below and asks the queue to retry this message instead.
-            const retryAt = googleAdsRetryAfterTooRecent();
-            await enqueueDelivery(ce.id, retryAt);
-            await prisma.delivery.update({
-              where: { id: d.id },
-              data: {
-                status: "PENDING",
-                notBefore: retryAt,
-                attempts: { increment: 1 },
-                lastAttemptAt: new Date(),
+          } else if (!r.ok && r.tooRecent) {
+            // Waiting is all this upload needs. Whatever happens here, the run is done with
+            // it: the queue is not asked to retry this message.
+            const retries = tooRecentRetriesOf(d.responseBody);
+            const attemptedAt = new Date();
+            const retryAt = new Date(attemptedAt.getTime() + TOO_RECENT_RETRY_DELAY_MS);
+            let failure: string | null = null;
+            if (retries >= TOO_RECENT_MAX_RETRIES) {
+              failure = `Still too recent for Google after ${TOO_RECENT_MAX_RETRIES} retries.`;
+            } else {
+              try {
+                await enqueuePlatformRetry(ce.id, "GOOGLE_ADS", retryAt);
+              } catch {
+                console.error(
+                  "Delivery worker: could not queue the retry of a too-recent Google Ads upload",
+                  { canonicalEventId: ce.id },
+                );
+                failure = "Too recent for Google, and its retry could not be queued.";
+              }
+            }
+            if (failure) {
+              await mark({
+                status: "FAILED",
                 responseCode: r.status,
-                responseBody: `Held until ${retryAt.toISOString()}: Google answered TOO_RECENT_EVENT. ${r.body}`,
+                responseBody: `${failure} ${r.body}`,
                 requestBody: r.requestBody,
-              },
-            });
+              });
+            } else {
+              await prisma.delivery.update({
+                where: { id: d.id },
+                data: {
+                  status: "PENDING",
+                  attempts: { increment: 1 },
+                  lastAttemptAt: attemptedAt,
+                  responseCode: r.status,
+                  responseBody: `${TOO_RECENT_MARKER}${retries + 1}/${TOO_RECENT_MAX_RETRIES} after ${retryAt.toISOString()}. ${r.body}`,
+                  requestBody: r.requestBody,
+                },
+              });
+            }
           } else {
             // A validate-only upload is checked by Google but records no conversion.
             const validatedOnly = r.ok && r.validateOnly;

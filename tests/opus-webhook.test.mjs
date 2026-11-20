@@ -133,18 +133,9 @@ function webhook(options = {}) {
       },
       zod,
       "@/lib/prisma": { prisma },
-      // A new event is queued with queueDeliveries, a resend's leftovers with enqueueDelivery.
-      "@/lib/qstash": {
-        enqueueDelivery: async (id) => queued.push(id),
-        queueDeliveries: async (id) => queued.push(id),
-      },
+      "@/lib/qstash": { enqueueDelivery: async (id) => queued.push(id) },
       "@/lib/adEvents": loadTsModule(
         new URL("../src/lib/adEvents.ts", import.meta.url),
-        {},
-        { process: { env } },
-      ),
-      "@/lib/googleAdsHold": loadTsModule(
-        new URL("../src/lib/googleAdsHold.ts", import.meta.url),
         {},
         { process: { env } },
       ),
@@ -219,6 +210,17 @@ test("a signed trial booking is recorded once and queued for Google Ads and HubS
       ["META", "SKIPPED", "ce_1"],
     ],
   );
+  // A booking must record on a database that has none of this change's additions: its
+  // delivery rows carry only columns that were always there, and it writes no contact row.
+  for (const delivery of deliveries) {
+    assert.deepEqual(Object.keys(delivery).sort(), [
+      "canonicalEventId",
+      "platform",
+      "responseBody",
+      "status",
+    ]);
+  }
+  assert.equal(w.rows("eventContact").length, 0);
   assert.deepEqual(w.queued, ["ce_1"]);
 });
 
@@ -288,9 +290,6 @@ test("a resend is deduplicated and requeues only deliveries left unattempted for
     [minutesAgo(11), [{ status: "PENDING", attempts: 0 }], true],
     [minutesAgo(11), [{ status: "SUCCESS", attempts: 1 }], false],
     [minutesAgo(11), [{ status: "FAILED", attempts: 1 }], false],
-    // Held for Google: its later message is still to come, until that time is well past.
-    [minutesAgo(11), [{ status: "PENDING", attempts: 0, notBefore: minutesAgo(-300) }], false],
-    [minutesAgo(400), [{ status: "PENDING", attempts: 0, notBefore: minutesAgo(11) }], true],
   ]) {
     const w = webhook({
       failOn: "appointment",
@@ -303,6 +302,11 @@ test("a resend is deduplicated and requeues only deliveries left unattempted for
     assert.equal(response.body.requeued, requeued);
     assert.equal(w.committed.length, 0);
     assert.deepEqual(w.queued, requeued ? ["ce_existing"] : []);
+    // Found by its appointment, the query a booking's resend has always run.
+    assert.deepEqual(
+      { ...w.eventLookups[0] },
+      { appointmentId: "opus_lesson-1", name: "TRIAL_BOOKED" },
+    );
   }
 });
 
@@ -612,7 +616,7 @@ test("a resent account writes nothing, and the same user as family and teacher i
   assert.deepEqual(
     { ...resent.eventLookups[0] },
     {
-      eventId: "opus_account_user-1",
+      attributionTok: "opus_account_user-1",
       name: "ACCOUNT_CREATED",
     },
   );
@@ -686,52 +690,4 @@ test("an account with no click ID and no email or phone is recorded but not deli
       ["PENDING", "PENDING"],
     );
   }
-});
-
-test("a Google Ads delivery waits six and a quarter hours after the visit's last touch", async () => {
-  const minutesAgo = (minutes) => new Date(Date.now() - minutes * 60 * 1000);
-  const HOLD_MS = 375 * 60 * 1000;
-  const notBeforeOf = (w, platform) =>
-    w.rows("delivery")[0].find((d) => d.platform === platform).notBefore;
-  const sendNow = (w, lastTouchAt, more = {}) =>
-    w.send(
-      payload({
-        occurredAt: new Date().toISOString(),
-        attribution: { lastTouchAt: lastTouchAt.toISOString(), ...more },
-      }),
-    );
-
-  // A booking minutes after the ad click: held, not uploaded and rejected as too recent.
-  const lastTouch = minutesAgo(10);
-  const fresh = webhook();
-  await sendNow(fresh, lastTouch);
-  assert.equal(notBeforeOf(fresh, "GOOGLE_ADS").getTime(), lastTouch.getTime() + HOLD_MS);
-  // Only Google has the rule.
-  assert.equal(notBeforeOf(fresh, "HUBSPOT"), null);
-
-  // The click ID can come from the ingest row or from Opus's own capture, so the later touch counts.
-  const ingestTouch = minutesAgo(3);
-  const linked = webhook({
-    ingestRows: { [INGEST_TOKEN]: { ...ingestRow, lastTouchAt: ingestTouch } },
-  });
-  await sendNow(linked, minutesAgo(90), { vaAttrib: INGEST_TOKEN });
-  assert.equal(notBeforeOf(linked, "GOOGLE_ADS").getTime(), ingestTouch.getTime() + HOLD_MS);
-
-  // An old click goes at once, and so does everything with the hold switched off.
-  const old = webhook();
-  await sendNow(old, minutesAgo(400));
-  assert.equal(notBeforeOf(old, "GOOGLE_ADS"), null);
-  const off = webhook({ env: { GOOGLE_ADS_HOLD_MINUTES: "0" } });
-  await sendNow(off, lastTouch);
-  assert.equal(notBeforeOf(off, "GOOGLE_ADS"), null);
-
-  // An account is held the same way.
-  const account = webhook();
-  await account.send(
-    accountPayload({
-      occurredAt: new Date().toISOString(),
-      attribution: { lastTouchAt: lastTouch.toISOString() },
-    }),
-  );
-  assert.equal(notBeforeOf(account, "GOOGLE_ADS").getTime(), lastTouch.getTime() + HOLD_MS);
 });

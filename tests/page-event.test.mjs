@@ -4,33 +4,36 @@ import { createRequire } from "node:module";
 import test from "node:test";
 import { loadTsModule } from "./support/load-ts-module.mjs";
 
-// The real /api/attrib/event route against an in-memory transaction and queue.
-// Contract: docs/page-events.md.
+// The real /api/attrib/event route against an in-memory database whose transactions and
+// advisory locks behave like PostgreSQL's: writes show only once committed, and a lock has one
+// holder at a time until its transaction ends. Contract: docs/page-events.md.
 
 const require = createRequire(import.meta.url);
 const zod = require("zod");
 
 const PAGE = "https://lessons.virtu.academy";
-const VISIT = "0b6c5a1e-3f4d-4c2b-9a8e-7d6f5e4c3b2a";
 const CALLER_IP = "203.0.113.7";
-const HOLD_MS = 375 * 60 * 1000;
-const DAY_MS = 24 * 60 * 60 * 1000;
+const DAY_MINUTES = 24 * 60;
 const minutesAgo = (minutes) => new Date(Date.now() - minutes * 60 * 1000);
+const tick = () => new Promise((resolve) => setTimeout(resolve, 2));
 const on = { PAGE_DELIVERY_PLATFORMS: "GOOGLE_ADS,META" };
 
-// A visit that came from a Google ad long enough ago for Google to accept an upload.
-const visitRow = {
-  token: VISIT,
-  createdAt: minutesAgo(600),
-  firstTouchAt: minutesAgo(600),
-  lastTouchAt: minutesAgo(500),
+// A visit that came from a Google ad, seen a few minutes ago.
+const visitToken = (n) => `0b6c5a1e-3f4d-4c2b-9a8e-${String(n).padStart(12, "0")}`;
+const visit = (n, more = {}) => ({
+  token: visitToken(n),
+  createdAt: minutesAgo(30),
+  firstTouchAt: minutesAgo(30),
+  lastTouchAt: minutesAgo(5),
   firstUrl: "https://lessons.virtu.academy/trial?gclid=G-1",
   lastUrl: "https://lessons.virtu.academy/trial",
   gclid: "G-1",
   fbclid: null,
   fbc: null,
   sessionId: "session-1",
-};
+  ...more,
+});
+const VISIT = visitToken(1);
 
 const callback = (overrides = {}) => ({
   type: "callback.requested",
@@ -39,57 +42,115 @@ const callback = (overrides = {}) => ({
   ...overrides,
 });
 
-// `options.earlier` is an event this visit already reported in the window; `fromThisAddress`
-// is how many of this address's events were accepted for delivery in it, and `fromEveryone`
-// how many page events it holds in all.
+// `options.visits` are the recorded visits (visit 1 by default). `options.accepted` are
+// callbacks accepted earlier: `{ vaAttrib, ipAddress, minutesAgo }`, each defaulting to a
+// visit and an address of its own, an hour ago. `options.duringTransaction` runs inside a
+// request's transaction, after its locks and checks, to hold it there.
 function endpoint(options = {}) {
-  const committed = [];
-  const queued = [];
-  const errors = [];
-  // What the transaction did before writing, in order, with what it asked for.
-  const steps = [];
   const env = { ALLOWED_ORIGINS: `https://virtu.academy,${PAGE}`, ...options.env };
-  const lib = (file, dependencies = {}) =>
-    loadTsModule(new URL(`../src/lib/${file}`, import.meta.url), dependencies, {
-      process: { env },
+  const visits = Object.fromEntries((options.visits ?? [visit(1)]).map((row) => [row.token, row]));
+  // The committed database.
+  const db = { attributions: [], events: [], contacts: [], deliveries: [] };
+  let rowNumber = 0;
+  for (const earlier of options.accepted ?? []) {
+    const id = `ce_earlier_${++rowNumber}`;
+    db.events.push({
+      id,
+      name: "CALLBACK_REQUESTED",
+      eventTime: minutesAgo(earlier.minutesAgo ?? 60),
     });
-  const write = (writes, table, result) => async (args) => {
-    writes.push({ table, data: args.data });
-    return result;
+    db.contacts.push({
+      canonicalEventId: id,
+      vaAttrib: earlier.vaAttrib ?? `earlier-visit-${rowNumber}`,
+      ipAddress: "ipAddress" in earlier ? earlier.ipAddress : `198.51.100.${rowNumber}`,
+    });
+  }
+  const seeded = { events: db.events.length, contacts: db.contacts.length };
+  const queued = [];
+  const warnings = [];
+  const errors = [];
+  const lockKeys = [];
+  let transactions = 0;
+
+  // Advisory locks: one holder per key, the next waits for it.
+  const lockTails = new Map();
+  const acquire = (key) => {
+    const previous = lockTails.get(key) ?? Promise.resolve();
+    let release;
+    const held = new Promise((resolve) => (release = resolve));
+    lockTails.set(
+      key,
+      previous.then(() => held),
+    );
+    return previous.then(() => release);
   };
-  const asked = (step, result) => async (args) => {
-    steps.push([step, args?.where]);
-    return result;
+
+  const contactsWhere = (where) =>
+    db.contacts.filter((contact) => {
+      const event = db.events.find((row) => row.id === contact.canonicalEventId);
+      return (
+        (!("vaAttrib" in where) || contact.vaAttrib === where.vaAttrib) &&
+        (!("ipAddress" in where) || contact.ipAddress === where.ipAddress) &&
+        event.name === where.canonicalEvent.name &&
+        event.eventTime > where.canonicalEvent.eventTime.gt
+      );
+    });
+  // Every read sees committed rows only.
+  const contactReads = {
+    findFirst: async ({ where }) => contactsWhere(where)[0] ?? null,
+    count: async ({ where }) => contactsWhere(where).length,
   };
   const prisma = {
-    attribution: {
-      findUnique: async ({ where }) =>
-        (options.visits ?? { [VISIT]: visitRow })[where.token] ?? null,
+    attribution: { findUnique: async ({ where }) => visits[where.token] ?? null },
+    eventContact: contactReads,
+    canonicalEvent: {
+      count: async ({ where }) =>
+        db.events.filter(
+          (event) => where.name.in.includes(event.name) && event.eventTime > where.eventTime.gt,
+        ).length,
     },
-    // Writes become visible only when the callback resolves, like a rolled-back transaction.
     $transaction: async (run) => {
-      const writes = [];
-      const result = await run({
-        $executeRaw: async (sql) => {
-          steps.push(["lock", sql.join("")]);
-          return 1;
-        },
-        eventContact: {
-          findFirst: asked("sameVisit", options.earlier ?? null),
-          count: asked("sameAddress", options.fromThisAddress ?? 0),
-          create: write(writes, "eventContact"),
-        },
-        attribution: { create: write(writes, "attribution") },
-        canonicalEvent: {
-          count: asked("everyone", options.fromEveryone ?? 0),
-          create: write(writes, "canonicalEvent", { id: "ce_1" }),
-        },
-        delivery: { createMany: write(writes, "delivery") },
-      });
-      committed.push(...writes);
-      return result;
+      transactions += 1;
+      const releases = [];
+      const writes = { attributions: [], events: [], contacts: [], deliveries: [] };
+      try {
+        const result = await run({
+          $executeRaw: async (sql, value) => {
+            const key = `${sql.join("?")} ${value}`;
+            lockKeys.push(key);
+            releases.push(await acquire(key));
+            return 1;
+          },
+          eventContact: {
+            ...contactReads,
+            create: async ({ data }) => writes.contacts.push(data),
+          },
+          attribution: {
+            create: async ({ data }) => {
+              await options.duringTransaction?.(data);
+              await tick();
+              writes.attributions.push(data);
+            },
+          },
+          canonicalEvent: {
+            create: async ({ data }) => {
+              const row = { id: `ce_${++rowNumber}`, ...data };
+              writes.events.push(row);
+              return row;
+            },
+          },
+          delivery: { createMany: async ({ data }) => writes.deliveries.push(...data) },
+        });
+        for (const table of Object.keys(writes)) db[table].push(...writes[table]);
+        return result;
+      } finally {
+        for (const release of releases.reverse()) release();
+      }
     },
   };
+
+  const lib = (file) =>
+    loadTsModule(new URL(`../src/lib/${file}`, import.meta.url), {}, { process: { env } });
   const { POST } = loadTsModule(
     new URL("../src/app/api/attrib/event/route.ts", import.meta.url),
     {
@@ -108,37 +169,51 @@ function endpoint(options = {}) {
       "@/lib/attribToken": lib("attribToken.ts"),
       "@/lib/bookingSource": lib("bookingSource.ts"),
       "@/lib/adEvents": lib("adEvents.ts"),
-      "@/lib/googleAdsHold": lib("googleAdsHold.ts"),
-      "@/lib/qstash": { queueDeliveries: async (id) => queued.push(id) },
+      "@/lib/qstash": { enqueueDelivery: async (id) => queued.push(id) },
     },
-    { process: { env }, console: { error: (...line) => errors.push(line) } },
+    {
+      process: { env },
+      console: {
+        warn: (...line) => warnings.push(line),
+        error: (...line) => errors.push(line),
+      },
+    },
   );
-  const send = (body, origin = PAGE, headers = { "x-forwarded-for": `${CALLER_IP}, 10.0.0.1` }) => {
+  const send = (body, { origin = PAGE, ip = CALLER_IP } = {}) => {
     const raw = typeof body === "string" ? body : JSON.stringify(body);
     return POST({
       text: async () => raw,
-      headers: new Headers({ ...headers, ...(origin ? { origin } : {}) }),
+      headers: new Headers({
+        ...(ip ? { "x-forwarded-for": `${ip}, 10.0.0.1` } : {}),
+        ...(origin ? { origin } : {}),
+      }),
     });
   };
-  const rows = (table) => committed.filter((w) => w.table === table).map((w) => w.data);
-  const whereOf = (step) => steps.find(([name]) => name === step)?.[1];
-  return { send, committed, queued, errors, rows, steps, whereOf };
+  // What this endpoint added to the database since the test began.
+  const added = () => ({
+    attributions: db.attributions,
+    events: db.events.slice(seeded.events),
+    contacts: db.contacts.slice(seeded.contacts),
+    deliveries: db.deliveries,
+  });
+  const wroteNothing = () => Object.values(added()).every((rows) => rows.length === 0);
+  return {
+    send,
+    added,
+    wroteNothing,
+    queued,
+    warnings,
+    errors,
+    lockKeys,
+    transactions: () => transactions,
+  };
 }
 
-const statuses = (e) => Array.from(e.rows("delivery")[0], (d) => [d.platform, d.status]);
+const statuses = (e) => e.added().deliveries.map((d) => [d.platform, d.status]);
 const delivered = [
   ["GOOGLE_ADS", "PENDING"],
   ["META", "PENDING"],
 ];
-// Every delivery row is SKIPPED for the same reason, and nothing is queued.
-function assertNotDelivered(e, reason) {
-  assert.equal(e.rows("canonicalEvent").length, 1);
-  for (const delivery of e.rows("delivery")[0]) {
-    assert.equal(delivery.status, "SKIPPED");
-    assert.match(delivery.responseBody, reason);
-  }
-  assert.equal(e.queued.length, 0);
-}
 
 test("a callback from the page is recorded as its own event and queued for Google Ads and Meta", async () => {
   const e = endpoint({ env: { ...on, EVENT_VALUES: "page:CALLBACK_REQUESTED=15" } });
@@ -148,14 +223,15 @@ test("a callback from the page is recorded as its own event and queued for Googl
   assert.deepEqual({ ...response.body }, { ok: true });
   assert.equal(response.headers.get("Access-Control-Allow-Origin"), PAGE);
 
+  const { attributions, events, contacts, deliveries } = e.added();
   // The visit frozen under the event's own token, so later page views cannot change it.
-  const [snapshot] = e.rows("attribution");
+  const [snapshot] = attributions;
   assert.match(snapshot.token, /^page_callback_[0-9a-f-]{36}$/);
   assert.equal(snapshot.gclid, "G-1");
   assert.equal(snapshot.sessionId, "session-1");
   assert.equal(snapshot.createdAt, undefined);
 
-  const [event] = e.rows("canonicalEvent");
+  const [event] = events;
   assert.equal(event.name, "CALLBACK_REQUESTED");
   assert.equal(event.eventId, snapshot.token);
   assert.equal(event.attributionTok, snapshot.token);
@@ -164,9 +240,9 @@ test("a callback from the page is recorded as its own event and queued for Googl
   assert.equal(event.currency, "USD");
 
   assert.deepEqual(
-    { ...e.rows("eventContact")[0] },
+    { ...contacts[0] },
     {
-      canonicalEventId: "ce_1",
+      canonicalEventId: event.id,
       email: "parent@example.com",
       phone: "(555) 555-0123",
       firstName: "Pat",
@@ -177,24 +253,42 @@ test("a callback from the page is recorded as its own event and queued for Googl
   );
 
   assert.deepEqual(statuses(e), delivered);
-  // The click is over six hours old, so nothing waits.
-  assert.equal(e.rows("delivery")[0][0].notBefore, null);
-  assert.deepEqual(e.queued, ["ce_1"]);
-  assert.equal(e.errors.length, 0);
+  // Only columns the Delivery table has always had: nothing is held back.
+  for (const delivery of deliveries) {
+    assert.deepEqual(Object.keys(delivery).sort(), [
+      "canonicalEventId",
+      "platform",
+      "responseBody",
+      "status",
+    ]);
+  }
+  assert.deepEqual(e.queued, [event.id]);
+  assert.equal(e.warnings.length + e.errors.length, 0);
+  // The visit's lock, then the address's: always in that order.
+  assert.equal(e.lockKeys.length, 2);
+  assert.match(e.lockKeys[0], /pg_advisory_xact_lock\(731620, hashtext\(\?\)\)/);
+  assert.ok(e.lockKeys[0].endsWith(VISIT));
+  assert.match(e.lockKeys[1], /pg_advisory_xact_lock\(731621, hashtext\(\?\)\)/);
+  assert.ok(e.lockKeys[1].endsWith(CALLER_IP));
 });
 
 test("page deliveries stay off until PAGE_DELIVERY_PLATFORMS lists the platform", async () => {
   // The Opus setting says nothing about page events.
   const e = endpoint({ env: { OPUS_DELIVERY_PLATFORMS: "GOOGLE_ADS,HUBSPOT,META" } });
   assert.equal((await e.send(callback())).status, 200);
-  assertNotDelivered(e, /PAGE_DELIVERY_PLATFORMS/);
-  assert.equal(e.rows("canonicalEvent")[0].value, null);
+  // Recorded, so the rules per visit and per address still count it, and delivered nowhere.
+  assert.equal(e.added().events.length, 1);
+  for (const delivery of e.added().deliveries) {
+    assert.equal(delivery.status, "SKIPPED");
+    assert.match(delivery.responseBody, /PAGE_DELIVERY_PLATFORMS/);
+  }
+  assert.equal(e.added().events[0].value, null);
+  assert.equal(e.queued.length, 0);
 });
 
 test("an unknown visit, another site and a body outside the contract are refused without writes", async () => {
-  const unknown = "11111111-2222-4333-8444-555555555555";
   for (const [name, body, origin, status] of [
-    ["a token no visit has", callback({ attribTok: unknown }), PAGE, 404],
+    ["a token no visit has", callback({ attribTok: visitToken(999) }), PAGE, 404],
     ["an Opus event's token", callback({ attribTok: "opus_lesson-1" }), PAGE, 400],
     ["another page event's token", callback({ attribTok: "page_callback_1" }), PAGE, 400],
     ["no token", callback({ attribTok: undefined }), PAGE, 400],
@@ -207,74 +301,98 @@ test("an unknown visit, another site and a body outside the contract are refused
     ["no Origin header", callback(), null, 403],
   ]) {
     const e = endpoint({ env: on });
-    const response = await e.send(body, origin);
+    const response = await e.send(body, { origin });
     assert.equal(response.status, status, name);
     assert.equal(response.body.ok, false, name);
     assert.equal(JSON.stringify(response.body).includes("example.com"), false, name);
-    assert.equal(e.committed.length, 0, name);
+    assert.ok(e.wroteNothing(), name);
+    assert.equal(e.transactions(), 0, name);
     assert.equal(e.queued.length, 0, name);
   }
 });
 
-test("a second callback for the same visit within 24 hours is recorded but not delivered", async () => {
-  const e = endpoint({ env: on, earlier: { canonicalEventId: "ce_earlier" } });
-  const before = Date.now();
-  assert.equal((await e.send(callback())).status, 200);
-  assertNotDelivered(e, /^Duplicate/);
-
-  // Page events are checked one at a time, so two requests cannot both pass a check.
-  assert.deepEqual(
-    e.steps.map(([step]) => step),
-    ["lock", "sameVisit", "sameAddress", "everyone"],
-  );
-  assert.match(e.steps[0][1], /pg_advisory_xact_lock/);
-  const where = e.whereOf("sameVisit");
-  assert.equal(where.vaAttrib, VISIT);
-  assert.equal(where.canonicalEvent.name, "CALLBACK_REQUESTED");
-  assert.ok(Math.abs(where.canonicalEvent.eventTime.gt.getTime() - (before - DAY_MS)) < 5_000);
+test("a request a rule refuses writes nothing, takes no lock and is logged without anything personal", async () => {
+  const fromCaller = { ipAddress: CALLER_IP };
+  for (const [name, options, body, reason] of [
+    [
+      "a visit last seen over 24 hours ago",
+      { visits: [visit(1, { lastTouchAt: minutesAgo(DAY_MINUTES + 60) })] },
+      callback(),
+      /last seen more than 24 hours ago/,
+    ],
+    [
+      "nothing to match it with",
+      { visits: [visit(1, { gclid: null })] },
+      callback({ contact: { email: " ", firstName: "Pat" } }),
+      /no click ID and no email or phone/,
+    ],
+    [
+      "a second callback for the visit",
+      { accepted: [{ vaAttrib: VISIT }] },
+      callback(),
+      /visit already reported one in the last 24 hours/,
+    ],
+    [
+      "a fourth callback from the address",
+      { accepted: [fromCaller, fromCaller, fromCaller] },
+      callback(),
+      /address already had 3 accepted .*PAGE_EVENT_DAILY_LIMIT_PER_IP/,
+    ],
+  ]) {
+    const e = endpoint({ env: on, ...options });
+    const response = await e.send(body);
+    // Answered like an accepted one.
+    assert.equal(response.status, 200, name);
+    assert.deepEqual({ ...response.body }, { ok: true }, name);
+    // No event, no contact row, no delivery: a flood of these cannot fill the database.
+    assert.ok(e.wroteNothing(), name);
+    assert.equal(e.queued.length, 0, name);
+    // Refused by the cheap checks, before any transaction or lock.
+    assert.equal(e.transactions(), 0, name);
+    assert.equal(e.lockKeys.length, 0, name);
+    // One line that says why and nothing about the caller.
+    assert.equal(e.warnings.length, 1, name);
+    assert.match(e.warnings[0][0], /^\[page-events\] refused callback\.requested: /, name);
+    assert.match(e.warnings[0][0], reason, name);
+    const line = JSON.stringify(e.warnings);
+    for (const personal of ["parent@example.com", "555", "Pat", VISIT, CALLER_IP]) {
+      assert.equal(line.includes(personal), false, `${name}: ${personal}`);
+    }
+  }
 });
 
-test("a visit not seen in the last 24 hours cannot report an event that is delivered", async () => {
-  const visited = (minutes) => ({ [VISIT]: { ...visitRow, lastTouchAt: minutesAgo(minutes) } });
-  const stale = endpoint({ env: on, visits: visited(25 * 60) });
-  assert.equal((await stale.send(callback())).status, 200);
-  assertNotDelivered(stale, /^Stale visit/);
+test("the rules per visit and per address count only accepted callbacks of the last 24 hours", async () => {
+  const fromCaller = (more = {}) => ({ ipAddress: CALLER_IP, ...more });
+  for (const [name, options] of [
+    ["two from the address", { accepted: [fromCaller(), fromCaller()] }],
+    [
+      "three from the address, one of them over a day old",
+      { accepted: [fromCaller(), fromCaller(), fromCaller({ minutesAgo: DAY_MINUTES + 5 })] },
+    ],
+    [
+      "the visit's last callback over a day old",
+      { accepted: [{ vaAttrib: VISIT, minutesAgo: DAY_MINUTES + 5 }] },
+    ],
+    [
+      "three from the address with the limit raised",
+      {
+        accepted: [fromCaller(), fromCaller(), fromCaller()],
+        env: { ...on, PAGE_EVENT_DAILY_LIMIT_PER_IP: "5" },
+      },
+    ],
+  ]) {
+    const e = endpoint({ env: on, ...options });
+    await e.send(callback());
+    assert.deepEqual(statuses(e), delivered, name);
+    assert.equal(e.warnings.length, 0, name);
+  }
 
-  const recent = endpoint({ env: on, visits: visited(23 * 60) });
-  await recent.send(callback());
-  assert.deepEqual(statuses(recent), delivered);
-});
-
-test("one address gets a few delivered callbacks a day, and the rest are only recorded", async () => {
-  const before = Date.now();
-  const capped = endpoint({ env: on, fromThisAddress: 3 });
-  assert.equal((await capped.send(callback())).status, 200);
-  assertNotDelivered(capped, /^Limit reached: 3 .* one address .*PAGE_EVENT_DAILY_LIMIT_PER_IP/);
-
-  // Counted: this caller's events of the last 24 hours that were accepted for delivery.
-  const where = capped.whereOf("sameAddress");
-  assert.equal(where.ipAddress, CALLER_IP);
-  assert.equal(where.canonicalEvent.name, "CALLBACK_REQUESTED");
-  assert.ok(Math.abs(where.canonicalEvent.eventTime.gt.getTime() - (before - DAY_MS)) < 5_000);
-  assert.deepEqual(JSON.parse(JSON.stringify(where.canonicalEvent.deliveries)), {
-    some: { status: { not: "SKIPPED" } },
-  });
-
-  const under = endpoint({ env: on, fromThisAddress: 2 });
-  await under.send(callback());
-  assert.deepEqual(statuses(under), delivered);
-
-  // The setting moves the limit; requests with no address share one allowance.
-  const raised = endpoint({
-    env: { ...on, PAGE_EVENT_DAILY_LIMIT_PER_IP: "5" },
-    fromThisAddress: 3,
-  });
-  await raised.send(callback());
-  assert.deepEqual(statuses(raised), delivered);
-  const noAddress = endpoint({ env: on });
-  await noAddress.send(callback(), PAGE, {});
-  assert.equal(noAddress.whereOf("sameAddress").ipAddress, null);
-  assert.equal(noAddress.rows("eventContact")[0].ipAddress, null);
+  // Requests with no address share one allowance.
+  const unknown = { ipAddress: null };
+  const noAddress = endpoint({ env: on, accepted: [unknown, unknown, unknown] });
+  await noAddress.send(callback(), { ip: null });
+  assert.ok(noAddress.wroteNothing());
+  assert.match(noAddress.warnings[0][0], /address already had 3/);
 });
 
 test("IPv6 callers are counted by their /64 network, so one network cannot rotate addresses", async () => {
@@ -293,20 +411,29 @@ test("IPv6 callers are counted by their /64 network, so one network cannot rotat
     ["2001:db8::1::2", "2001:db8::1::2"],
   ]) {
     const e = endpoint({ env: on });
-    await e.send(callback(), PAGE, { "x-forwarded-for": sent });
-    assert.equal(e.whereOf("sameAddress").ipAddress, countedAs, sent);
-    assert.equal(e.rows("eventContact")[0].ipAddress, countedAs, sent);
+    await e.send(callback(), { ip: sent });
+    assert.equal(e.added().contacts[0].ipAddress, countedAs, sent);
   }
+
+  // Three accepted from one network: a fourth address of that network is refused, while a
+  // neighbouring network is not.
+  const network = { ipAddress: "2001:db8:1:2::/64" };
+  const sameNetwork = endpoint({ env: on, accepted: [network, network, network] });
+  await sameNetwork.send(callback(), { ip: "2001:db8:1:2:9999::1" });
+  assert.ok(sameNetwork.wroteNothing());
+  const neighbour = endpoint({ env: on, accepted: [network, network, network] });
+  await neighbour.send(callback(), { ip: "2001:db8:1:3:9999::1" });
+  assert.deepEqual(statuses(neighbour), delivered);
 });
 
 test("past the daily alert threshold an error is logged and the event is still delivered", async () => {
-  // The 26th page event of the last 24 hours, whoever sent the others.
-  const busy = endpoint({ env: on, fromEveryone: 25 });
+  // 25 callbacks already accepted in the last 24 hours, each from its own visit and address.
+  const busy = endpoint({ env: on, accepted: Array.from({ length: 25 }, () => ({})) });
   assert.equal((await busy.send(callback())).status, 200);
   // Other visitors' traffic never refuses an event: a shared limit would let a few forged
   // requests a day stop every real callback.
   assert.deepEqual(statuses(busy), delivered);
-  assert.deepEqual(busy.queued, ["ce_1"]);
+  assert.equal(busy.queued.length, 1);
   // The line monitoring looks for, naming the switch that stops a flood.
   assert.equal(busy.errors.length, 1);
   assert.match(busy.errors[0][0], /^\[page-events\] 26 page events in 24 hours/);
@@ -314,12 +441,7 @@ test("past the daily alert threshold an error is logged and the event is still d
   assert.match(busy.errors[0][0], /PAGE_DELIVERY_PLATFORMS/);
   assert.equal(JSON.stringify(busy.errors).includes("parent@example.com"), false);
 
-  // Counted: every page event of the last 24 hours, refused ones included.
-  const where = busy.whereOf("everyone");
-  assert.deepEqual(JSON.parse(JSON.stringify(where.name)), { in: ["CALLBACK_REQUESTED"] });
-  assert.equal(where.deliveries, undefined);
-
-  const quiet = endpoint({ env: on, fromEveryone: 24 });
+  const quiet = endpoint({ env: on, accepted: Array.from({ length: 24 }, () => ({})) });
   await quiet.send(callback());
   assert.deepEqual(statuses(quiet), delivered);
   assert.equal(quiet.errors.length, 0);
@@ -327,32 +449,68 @@ test("past the daily alert threshold an error is logged and the event is still d
   // The setting moves the threshold.
   const lowered = endpoint({
     env: { ...on, PAGE_EVENT_DAILY_ALERT_THRESHOLD: "2" },
-    fromEveryone: 2,
+    accepted: [{}, {}],
   });
   await lowered.send(callback());
   assert.deepEqual(statuses(lowered), delivered);
   assert.match(lowered.errors[0][0], /^\[page-events\] 3 page events/);
 });
 
-test("a callback minutes after the ad click holds its Google Ads delivery", async () => {
-  const lastTouchAt = minutesAgo(4);
-  const e = endpoint({ env: on, visits: { [VISIT]: { ...visitRow, lastTouchAt } } });
-  await e.send(callback());
-  const [google, meta] = e.rows("delivery")[0];
-  assert.equal(google.notBefore.getTime(), lastTouchAt.getTime() + HOLD_MS);
-  assert.equal(meta.notBefore, null);
-  assert.deepEqual(e.queued, ["ce_1"]);
+test("of several callbacks sent at once for one visit, exactly one is accepted", async () => {
+  // Eight requests at the same moment, each from another address, all for one visit. None has
+  // been committed when the others run their first checks.
+  const e = endpoint({ env: on });
+  const responses = await Promise.all(
+    Array.from({ length: 8 }, (_, n) => e.send(callback(), { ip: `198.51.100.${n + 1}` })),
+  );
+  assert.deepEqual(
+    responses.map((response) => response.status),
+    Array(8).fill(200),
+  );
+  assert.equal(e.added().events.length, 1);
+  assert.equal(e.added().contacts.length, 1);
+  assert.equal(e.queued.length, 1);
+  // The other seven were refused under the visit's lock, and wrote nothing.
+  assert.equal(e.warnings.length, 7);
+  for (const [line] of e.warnings) assert.match(line, /visit already reported one/);
 });
 
-test("a callback with no click ID and no email or phone is recorded but not delivered", async () => {
-  const organic = { [VISIT]: { ...visitRow, gclid: null } };
+test("of several callbacks sent at once from one address, only its daily limit is accepted", async () => {
+  // Eight requests at the same moment from one address, each for another visit.
+  const visits = Array.from({ length: 8 }, (_, n) => visit(n + 1));
+  const e = endpoint({ env: on, visits });
+  await Promise.all(visits.map((row) => e.send(callback({ attribTok: row.token }))));
+  assert.equal(e.added().events.length, 3);
+  assert.equal(e.added().contacts.length, 3);
+  assert.equal(e.warnings.length, 5);
+  for (const [line] of e.warnings) assert.match(line, /address already had 3 accepted/);
+});
 
-  const nothing = endpoint({ env: on, visits: organic });
-  await nothing.send(callback({ contact: { email: " ", firstName: "Pat" } }));
-  assertNotDelivered(nothing, /No click ID and no contact details/);
+test("a request held up inside its transaction does not hold up another visitor", async () => {
+  // Visit 1 is stuck in its transaction, holding its locks, until it is let go.
+  let letGo;
+  const stuck = new Promise((resolve) => (letGo = resolve));
+  const e = endpoint({
+    env: on,
+    visits: [visit(1, { utmSource: "stuck" }), visit(2), visit(3)],
+    duringTransaction: (snapshot) => (snapshot.utmSource === "stuck" ? stuck : undefined),
+  });
+  const finished = [];
+  const send = (n, ip) =>
+    e.send(callback({ attribTok: visitToken(n) }), { ip }).then(() => finished.push(n));
 
-  // The form's email is enough for a visitor no ad click identifies.
-  const withEmail = endpoint({ env: on, visits: organic });
-  await withEmail.send(callback());
-  assert.deepEqual(statuses(withEmail), delivered);
+  const first = send(1, "198.51.100.1");
+  // Another visit from another address: no lock in common, so it goes straight through.
+  await send(2, "198.51.100.2");
+  assert.deepEqual(finished, [2]);
+  // Another visit from the stuck request's address has to wait for it, and only it.
+  const sameAddress = send(3, "198.51.100.1");
+  await tick();
+  await tick();
+  assert.deepEqual(finished, [2]);
+
+  letGo();
+  await Promise.all([first, sameAddress]);
+  assert.deepEqual(finished.sort(), [1, 2, 3]);
+  assert.equal(e.added().events.length, 3);
 });

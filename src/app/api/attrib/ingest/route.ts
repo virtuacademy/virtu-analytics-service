@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { randomId } from "@/lib/crypto";
 import { withCors } from "@/lib/cors";
-import { clientIp } from "@/lib/clientIp";
 import { setCookie, setReadableCookie, COOKIE_DOMAIN } from "@/lib/cookies";
 import { ingestIdOrNull } from "@/lib/attribToken";
 
@@ -21,6 +20,12 @@ type IngestBody = {
   sid?: unknown;
   attribTok?: unknown;
 };
+
+function getIp(req: NextRequest): string | null {
+  const xf = req.headers.get("x-forwarded-for");
+  if (xf) return xf.split(",")[0]?.trim() ?? null;
+  return req.headers.get("x-real-ip");
+}
 
 function now() {
   return new Date();
@@ -57,7 +62,7 @@ export async function OPTIONS(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const origin = req.headers.get("origin");
   const ua = req.headers.get("user-agent") ?? null;
-  const ip = clientIp(req.headers);
+  const ip = getIp(req);
   const mayCreateMetaCookies = !NO_META_COOKIE_ORIGINS.has(origin ?? "");
 
   let body: IngestBody;

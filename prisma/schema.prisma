@@ -192,8 +192,6 @@ model Delivery {
   status           DeliveryStatus  @default(PENDING)
   attempts         Int             @default(0)
   lastAttemptAt    DateTime?
-  // Not attempted before this time: a Google Ads upload waits until its click is old enough.
-  notBefore        DateTime?
   responseCode     Int?
   responseBody     String?
   requestBody      String?

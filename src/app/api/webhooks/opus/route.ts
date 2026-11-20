@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { hmacSha256Hex, sha256Hex } from "@/lib/crypto";
 import { timingSafeEqual } from "@/lib/auth";
-import { enqueueDelivery, queueDeliveries } from "@/lib/qstash";
+import { enqueueDelivery } from "@/lib/qstash";
 import {
   AD_EVENT_DELIVERY_PLATFORMS,
   OPUS_DELIVERY_PLATFORMS,
@@ -12,7 +12,6 @@ import {
 } from "@/lib/bookingSource";
 import { ingestIdOrNull } from "@/lib/attribToken";
 import { configuredEventValue, hasNothingToMatch } from "@/lib/adEvents";
-import { googleAdsNotBefore } from "@/lib/googleAdsHold";
 import type { Attribution } from "@prisma/client";
 
 // Opus (app.fortelessons.com) reports each booked trial lesson and each new account here.
@@ -171,7 +170,7 @@ function isUniqueViolation(error: unknown): boolean {
 
 type Snapshot = ReturnType<typeof attributionSnapshot>;
 
-function plannedDeliveries(payload: OpusPayload, snapshot: Snapshot, googleNotBefore: Date | null) {
+function plannedDeliveries(payload: OpusPayload, snapshot: Snapshot) {
   // Staff events are recorded but never delivered, like staff-booked Acuity appointments.
   if (payload.flags.staffInitiated) return [];
   const isBooking = payload.type === "trial.booked";
@@ -179,7 +178,6 @@ function plannedDeliveries(payload: OpusPayload, snapshot: Snapshot, googleNotBe
     platform,
     status: "SKIPPED" as const,
     responseBody,
-    notBefore: null,
   });
   // Every platform that is switched on receives every event, linked to a visit or not. A
   // family often books in another browser than the one that clicked the ad, and the hashed
@@ -196,13 +194,7 @@ function plannedDeliveries(payload: OpusPayload, snapshot: Snapshot, googleNotBe
     if (!isBooking && hasNothingToMatch(snapshot, payload.contact)) {
       return skipped(platform, "No click ID and no contact details to match this event with");
     }
-    return {
-      platform,
-      status: "PENDING" as const,
-      responseBody: null,
-      // Google rejects an upload for a click under six hours old (see googleAdsHold).
-      notBefore: platform === "GOOGLE_ADS" ? googleNotBefore : null,
-    };
+    return { platform, status: "PENDING" as const, responseBody: null };
   });
 }
 
@@ -245,17 +237,6 @@ function attributionSnapshot(payload: OpusPayload, ingest: Attribution | null, o
   };
 }
 
-// The last moment the click behind this event could have happened: the later of the ingest
-// row's last touch and the last ad visit Opus saw itself, since the click ID can come from
-// either. Null when neither is known.
-function lastTouchOf(payload: OpusPayload, ingest: Attribution | null): Date | null {
-  const times = [
-    ingest?.lastTouchAt.getTime(),
-    payload.attribution.lastTouchAt ? Date.parse(payload.attribution.lastTouchAt) : undefined,
-  ].filter((time): time is number => typeof time === "number" && Number.isFinite(time));
-  return times.length > 0 ? new Date(Math.max(...times)) : null;
-}
-
 async function record(raw: string, payload: OpusPayload) {
   const { eventId, contact, attribution, flags } = payload;
   const occurredAt = new Date(payload.occurredAt);
@@ -270,11 +251,7 @@ async function record(raw: string, payload: OpusPayload) {
       ? ingestRow
       : null;
   const snapshot = attributionSnapshot(payload, ingest, occurredAt);
-  const deliveries = plannedDeliveries(
-    payload,
-    snapshot,
-    googleAdsNotBefore(lastTouchOf(payload, ingest), occurredAt),
-  );
+  const deliveries = plannedDeliveries(payload, snapshot);
   const name = canonicalNameOf(payload);
   // A booking carries its own price. An account has none, so its value is a setting.
   const value =
@@ -371,24 +348,24 @@ async function record(raw: string, payload: OpusPayload) {
 // example an unrelated Attribution row with the same token, or the same user reported as
 // both a family and a teacher) is a conflict.
 // A resend writes nothing. Deliveries still unattempted after REQUEUE_AFTER_MS (the first
-// request recorded the event but could not queue it) are queued again. A held delivery counts
-// only once its own time has passed by as long: until then its later message is still to come.
+// request recorded the event but could not queue it) are queued again.
 async function resolveDuplicate(
-  eventId: string,
-  name: ReturnType<typeof canonicalNameOf>,
+  payload: OpusPayload,
 ): Promise<{ duplicate: false } | { duplicate: true; requeued: boolean }> {
+  const { eventId } = payload;
   const existing = await prisma.canonicalEvent.findFirst({
-    where: { eventId, name },
+    // A booking is found by its appointment, as before. An account has none, so by the token
+    // of its own Attribution row, which is the same ID.
+    where:
+      payload.type === "trial.booked"
+        ? { appointmentId: eventId, name: "TRIAL_BOOKED" }
+        : { attributionTok: eventId, name: ACCOUNT_EVENT_NAMES[payload.type] },
     include: { deliveries: true },
   });
   if (!existing) return { duplicate: false };
-  const now = Date.now();
-  const stale = now - existing.createdAt.getTime() > REQUEUE_AFTER_MS;
+  const stale = Date.now() - existing.createdAt.getTime() > REQUEUE_AFTER_MS;
   const unattempted = existing.deliveries.some(
-    (delivery) =>
-      delivery.status === "PENDING" &&
-      delivery.attempts === 0 &&
-      (!delivery.notBefore || now - delivery.notBefore.getTime() > REQUEUE_AFTER_MS),
+    (delivery) => delivery.status === "PENDING" && delivery.attempts === 0,
   );
   if (!stale || !unattempted) return { duplicate: true, requeued: false };
   await enqueueDelivery(existing.id);
@@ -444,7 +421,7 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     if (isUniqueViolation(error)) {
       try {
-        const outcome = await resolveDuplicate(eventId, canonicalNameOf(payload));
+        const outcome = await resolveDuplicate(payload);
         if (!outcome.duplicate) {
           console.error("Opus webhook: conflicting record", { eventId });
           return NextResponse.json(
@@ -470,7 +447,7 @@ export async function POST(req: NextRequest) {
 
   if (recorded.queue) {
     try {
-      await queueDeliveries(recorded.canonicalEventId);
+      await enqueueDelivery(recorded.canonicalEventId);
     } catch {
       console.error("Opus webhook: queuing deliveries failed", { eventId });
       return NextResponse.json(

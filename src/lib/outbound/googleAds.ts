@@ -31,7 +31,8 @@ type GoogleAdsSendResult =
       requestBody: string;
       // GOOGLE_ADS_VALIDATE_ONLY: Google checked the upload but recorded nothing.
       validateOnly: boolean;
-      // Google answered TOO_RECENT_EVENT: the click is under six hours old. Upload again later.
+      // Google refused the upload only because the click (TOO_RECENT_EVENT) or the conversion
+      // action (TOO_RECENT_CONVERSION_ACTION) is under six hours old. Upload again later.
       tooRecent: boolean;
     };
 
@@ -213,6 +214,16 @@ function conversionUploadErrorCodes(partialFailureError: unknown): Array<string 
 function isClickNotFoundOnly(partialFailureError: unknown): boolean {
   const codes = conversionUploadErrorCodes(partialFailureError);
   return codes.length > 0 && codes.every((code) => code === "CLICK_NOT_FOUND");
+}
+
+// True when waiting is all the upload needs: every error says the click or the conversion
+// action is too recent. Any other error beside them would repeat, so it is a failure.
+function isTooRecentOnly(partialFailureError: unknown): boolean {
+  const codes = conversionUploadErrorCodes(partialFailureError);
+  return (
+    codes.length > 0 &&
+    codes.every((code) => code === "TOO_RECENT_EVENT" || code === "TOO_RECENT_CONVERSION_ACTION")
+  );
 }
 
 function parseConversionActionMap(value?: string | null): Record<string, string> {
@@ -477,7 +488,6 @@ export async function sendGoogleAdsClickConversion(
 
   const body = parsed ? JSON.stringify(parsed) : text;
   const ok = res.ok && (!partialFailureError || isClickNotFoundOnly(partialFailureError));
-  const tooRecent =
-    res.ok && conversionUploadErrorCodes(partialFailureError).includes("TOO_RECENT_EVENT");
+  const tooRecent = res.ok && isTooRecentOnly(partialFailureError);
   return { skipped: false, ok, status: res.status, body, requestBody, validateOnly, tooRecent };
 }
