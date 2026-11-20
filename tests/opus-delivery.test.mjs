@@ -22,7 +22,8 @@ const googleEnv = {
   GOOGLE_ADS_CONVERSION_ACTIONS: "TRIAL_BOOKED=111,opus:TRIAL_BOOKED=222",
 };
 
-function googleAds(envOverrides = {}) {
+// `uploadResponse` is what Google answers an upload with (an empty success by default).
+function googleAds(envOverrides = {}, uploadResponse = {}) {
   const uploads = [];
   const fetchCalls = [];
   const fetch = async (url, init) => {
@@ -35,7 +36,7 @@ function googleAds(envOverrides = {}) {
       };
     }
     uploads.push(JSON.parse(init.body));
-    return { ok: true, status: 200, text: async () => "{}" };
+    return { ok: true, status: 200, text: async () => JSON.stringify(uploadResponse) };
   };
   const { sendGoogleAdsClickConversion } = loadTsModule(
     new URL("../src/lib/outbound/googleAds.ts", import.meta.url),
@@ -183,13 +184,23 @@ test("adding an opus: entry leaves Acuity's Meta event names as they were", asyn
   }
 });
 
+// `options.event` overrides the canonical event, for one that is not a booking: no appointment,
+// its contact details on `contact`.
 function worker(options = {}) {
   const appointmentId = options.appointmentId ?? "opus_lesson-1";
   const updates = [];
   const googleCalls = [];
   const hubspotCalls = [];
   const metaCalls = [];
+  const requeued = [];
   const sent = { skipped: false, ok: true, status: 200, body: "{}", requestBody: "{}" };
+  const env = {
+    QSTASH_CURRENT_SIGNING_KEY: "synthetic",
+    QSTASH_NEXT_SIGNING_KEY: "synthetic",
+    HUBSPOT_SOURCE_SYSTEM: "attrib.virtu.academy",
+    OPUS_DELIVERY_PLATFORMS: options.opusPlatforms ?? "GOOGLE_ADS,HUBSPOT",
+    ...options.env,
+  };
   const prisma = {
     canonicalEvent: {
       findUnique: async () => ({
@@ -201,15 +212,17 @@ function worker(options = {}) {
         attributionTok: appointmentId,
         value: 35,
         currency: "USD",
-        deliveries: [
-          { id: "google", platform: "GOOGLE_ADS", status: "PENDING" },
-          { id: "hubspot", platform: "HUBSPOT", status: "PENDING" },
+        deliveries: options.deliveries ?? [
+          { id: "google", platform: "GOOGLE_ADS", status: "PENDING", attempts: 0 },
+          { id: "hubspot", platform: "HUBSPOT", status: "PENDING", attempts: 0 },
           ...(options.extraDeliveries ?? []),
         ],
+        ...options.event,
       }),
     },
     appointment: {
-      findUnique: async () => ({
+      findUnique: async ({ where }) => ({
+        id: where.id,
         email: "parent@example.com",
         phone: "+15555550123",
         firstName: "Pat",
@@ -258,6 +271,18 @@ function worker(options = {}) {
       },
       "@/lib/prisma": { prisma },
       "@/lib/bookingSource": bookingSource,
+      // The later message a held delivery is put back with.
+      "@/lib/qstash": {
+        enqueueDelivery: async (id, notBefore) => {
+          if (options.requeueThrows) throw new Error("queue unavailable");
+          requeued.push({ id, notBefore });
+        },
+      },
+      "@/lib/googleAdsHold": loadTsModule(
+        new URL("../src/lib/googleAdsHold.ts", import.meta.url),
+        {},
+        { process: { env } },
+      ),
       "@/lib/outbound/googleAds": {
         sendGoogleAdsClickConversion: async (args) => {
           googleCalls.push(args);
@@ -283,16 +308,7 @@ function worker(options = {}) {
         validateOpenAIConversion: unexpected,
       },
     },
-    {
-      process: {
-        env: {
-          QSTASH_CURRENT_SIGNING_KEY: "synthetic",
-          QSTASH_NEXT_SIGNING_KEY: "synthetic",
-          HUBSPOT_SOURCE_SYSTEM: "attrib.virtu.academy",
-          OPUS_DELIVERY_PLATFORMS: options.opusPlatforms ?? "GOOGLE_ADS,HUBSPOT",
-        },
-      },
-    },
+    { process: { env } },
   );
   const invoke = () =>
     POST({
@@ -300,7 +316,7 @@ function worker(options = {}) {
       headers: new Headers({ "upstash-signature": "synthetic" }),
     });
   const statusOf = (id) => updates.find((u) => u.where.id === id)?.data;
-  return { invoke, googleCalls, hubspotCalls, metaCalls, otherCalls, statusOf };
+  return { invoke, googleCalls, hubspotCalls, metaCalls, otherCalls, requeued, statusOf };
 }
 
 test("an Opus booking reaches Google Ads and HubSpot as an Opus conversion", async () => {
@@ -450,4 +466,165 @@ test("HubSpot gets the visitor's utk when the Opus booking was linked to an inge
   const unlinked = worker();
   await unlinked.invoke();
   assert.equal(unlinked.hubspotCalls[0].utk, null);
+});
+
+// An event that is not a booking: no appointment, its contact details on its own row.
+const accountEvent = {
+  name: "ACCOUNT_CREATED",
+  appointmentId: null,
+  eventId: "opus_account_user-1",
+  attributionTok: "opus_account_user-1",
+  value: 15,
+  contact: {
+    email: "new@example.com",
+    phone: "+15555550199",
+    firstName: "Sam",
+    lastName: "Signup",
+    staffInitiated: false,
+  },
+};
+const adDeliveries = [
+  { id: "google", platform: "GOOGLE_ADS", status: "PENDING", attempts: 0 },
+  { id: "meta", platform: "META", status: "PENDING", attempts: 0 },
+];
+
+test("an account reaches Google Ads and Meta from its own contact row, with no appointment", async () => {
+  const w = worker({
+    event: accountEvent,
+    deliveries: adDeliveries,
+    opusPlatforms: "GOOGLE_ADS,META",
+    lastUrl: "https://lessons.virtu.academy/trial?fbclid=IwAR-1#faq",
+  });
+  assert.equal((await w.invoke()).status, 200);
+
+  const [google] = w.googleCalls;
+  assert.equal(google.source, "opus");
+  assert.equal(google.eventName, "ACCOUNT_CREATED");
+  assert.equal(google.eventId, "opus_account_user-1");
+  assert.equal(google.email, "new@example.com");
+  assert.equal(google.phone, "+15555550199");
+  assert.equal(google.conversionValue, 15);
+
+  const [meta] = w.metaCalls;
+  assert.equal(meta.source, "opus");
+  assert.equal(meta.eventName, "ACCOUNT_CREATED");
+  assert.equal(meta.email, "new@example.com");
+  assert.equal(meta.firstName, "Sam");
+  assert.equal(meta.eventSourceUrl, "https://lessons.virtu.academy/trial");
+  // Nothing that names an appointment.
+  assert.deepEqual(Object.keys(meta.customData).sort(), [
+    "utm_campaign",
+    "utm_medium",
+    "utm_source",
+  ]);
+  assert.equal(w.hubspotCalls.length, 0);
+  assert.equal(w.statusOf("google").status, "SUCCESS");
+  assert.equal(w.statusOf("meta").status, "SUCCESS");
+
+  const staff = worker({
+    event: { ...accountEvent, contact: { ...accountEvent.contact, staffInitiated: true } },
+    deliveries: adDeliveries,
+    opusPlatforms: "GOOGLE_ADS,META",
+  });
+  assert.equal((await staff.invoke()).body.skipReason, "created_by_opus_staff");
+  assert.equal(staff.googleCalls.length + staff.metaCalls.length, 0);
+  assert.equal(staff.statusOf("meta").status, "SKIPPED");
+});
+
+test("a page event obeys PAGE_DELIVERY_PLATFORMS, not the Opus setting", async () => {
+  const event = { ...accountEvent, name: "CALLBACK_REQUESTED", eventId: "page_callback_1" };
+  // Both platforms are on for Opus; only Meta is on for the page.
+  const w = worker({
+    event,
+    deliveries: adDeliveries,
+    opusPlatforms: "GOOGLE_ADS,META",
+    env: { PAGE_DELIVERY_PLATFORMS: "META" },
+  });
+  await w.invoke();
+  assert.equal(w.googleCalls.length, 0);
+  assert.equal(w.statusOf("google").status, "SKIPPED");
+  assert.match(w.statusOf("google").responseBody, /PAGE_DELIVERY_PLATFORMS/);
+  assert.equal(w.metaCalls[0].source, "page");
+  assert.equal(w.metaCalls[0].eventName, "CALLBACK_REQUESTED");
+  assert.equal(w.metaCalls[0].email, "new@example.com");
+
+  const off = worker({ event, deliveries: adDeliveries, opusPlatforms: "GOOGLE_ADS,META" });
+  await off.invoke();
+  assert.equal(off.googleCalls.length + off.metaCalls.length, 0);
+});
+
+test("a held Google Ads delivery is left untouched for its later message", async () => {
+  const inMinutes = (minutes) => new Date(Date.now() + minutes * 60 * 1000);
+  const withGoogle = (notBefore) => ({
+    deliveries: [
+      { id: "google", platform: "GOOGLE_ADS", status: "PENDING", attempts: 0, notBefore },
+      { id: "hubspot", platform: "HUBSPOT", status: "PENDING", attempts: 0 },
+    ],
+  });
+
+  const held = worker(withGoogle(inMinutes(300)));
+  assert.equal((await held.invoke()).status, 200);
+  assert.equal(held.googleCalls.length, 0);
+  // Not attempted, not failed, not skipped: still PENDING for the later message.
+  assert.equal(held.statusOf("google"), undefined);
+  assert.equal(held.statusOf("hubspot").status, "SUCCESS");
+
+  // Its own message may arrive a little early by this server's clock, and must still send it.
+  for (const notBefore of [inMinutes(1), inMinutes(-1)]) {
+    const due = worker(withGoogle(notBefore));
+    await due.invoke();
+    assert.equal(due.googleCalls.length, 1);
+    assert.equal(due.statusOf("google").status, "SUCCESS");
+  }
+});
+
+test("Google's too-recent answer puts the delivery back for later instead of failing it", async () => {
+  const tooRecent = { google: { ok: false, status: 200, body: "{}", tooRecent: true } };
+  const HOLD_MS = 375 * 60 * 1000;
+
+  const w = worker(tooRecent);
+  const before = Date.now();
+  assert.equal((await w.invoke()).status, 200);
+  const google = w.statusOf("google");
+  assert.equal(google.status, "PENDING");
+  assert.match(google.responseBody, /TOO_RECENT_EVENT/);
+  assert.ok(google.notBefore.getTime() >= before + HOLD_MS);
+  assert.deepEqual(
+    w.requeued.map((message) => [message.id, message.notBefore.getTime()]),
+    [["ce_1", google.notBefore.getTime()]],
+  );
+
+  // No later message could be scheduled: fail it and ask the queue to retry this one.
+  const unqueued = worker({ ...tooRecent, requeueThrows: true });
+  assert.equal((await unqueued.invoke()).status, 503);
+  assert.equal(unqueued.statusOf("google").status, "FAILED");
+
+  // Not forever.
+  const worn = worker({
+    ...tooRecent,
+    deliveries: [{ id: "google", platform: "GOOGLE_ADS", status: "PENDING", attempts: 4 }],
+  });
+  assert.equal((await worn.invoke()).status, 200);
+  assert.equal(worn.statusOf("google").status, "FAILED");
+  assert.equal(worn.requeued.length, 0);
+});
+
+test("the Google Ads adapter reports TOO_RECENT_EVENT apart from other rejections", async () => {
+  const partialFailure = (code) => ({
+    partialFailureError: {
+      details: [{ errors: [{ errorCode: { conversionUploadError: code } }] }],
+    },
+  });
+  const recent = await googleAds({}, partialFailure("TOO_RECENT_EVENT")).send();
+  assert.equal(recent.ok, false);
+  assert.equal(recent.tooRecent, true);
+
+  const expired = await googleAds({}, partialFailure("EXPIRED_EVENT")).send();
+  assert.equal(expired.ok, false);
+  assert.equal(expired.tooRecent, false);
+
+  // Unchanged: an unmatched click still counts as delivered.
+  const unmatched = await googleAds({}, partialFailure("CLICK_NOT_FOUND")).send();
+  assert.equal(unmatched.ok, true);
+  assert.equal(unmatched.tooRecent, false);
 });

@@ -6,7 +6,9 @@ import { sendHubSpotEvent } from "@/lib/outbound/hubspot";
 import { sendGoogleAdsClickConversion } from "@/lib/outbound/googleAds";
 import { sendTikTokEvent } from "@/lib/outbound/tiktok";
 import { sendOpenAIConversion, validateOpenAIConversion } from "@/lib/outbound/openai.mjs";
-import { bookingSourceFor, isOpusDeliveryEnabled } from "@/lib/bookingSource";
+import { bookingSourceFor, deliveryPlatformsSetting, isDeliveryEnabled } from "@/lib/bookingSource";
+import { enqueueDelivery } from "@/lib/qstash";
+import { googleAdsRetryAfterTooRecent } from "@/lib/googleAdsHold";
 
 export const runtime = "nodejs";
 
@@ -35,6 +37,13 @@ function isTransientStatus(status: number): boolean {
 // Platforms whose temporary failures are retried through QStash. A thrown error (for example a
 // network failure) counts as temporary too.
 const RETRIED_PLATFORMS = new Set(["OPENAI", "GOOGLE_ADS", "HUBSPOT"]);
+
+// A held delivery (`Delivery.notBefore`) is left for the later message scheduled for it. The
+// tolerance covers a clock that differs from the queue's, so that message never finds its own
+// delivery still held.
+const HOLD_TOLERANCE_MS = 2 * 60 * 1000;
+// How often one delivery may be put back after Google called its click too recent.
+const TOO_RECENT_MAX_ATTEMPTS = 4;
 
 // A page address without its query string or fragment.
 function originAndPath(url: string): string {
@@ -130,7 +139,7 @@ export async function POST(req: NextRequest) {
 
   const ce = await prisma.canonicalEvent.findUnique({
     where: { id: canonicalEventId },
-    include: { deliveries: true },
+    include: { deliveries: true, contact: true },
   });
   if (!ce)
     return NextResponse.json({ ok: false, error: "Missing canonical event" }, { status: 404 });
@@ -138,12 +147,16 @@ export async function POST(req: NextRequest) {
   const appt = ce.appointmentId
     ? await prisma.appointment.findUnique({ where: { id: ce.appointmentId } })
     : null;
+  // A booking keeps its contact details on the appointment. An event that is not a booking (an
+  // account created, a callback requested) keeps them on its own row.
+  const contact = appt ?? ce.contact ?? null;
   const scheduledBy = appt?.scheduledBy?.trim() ?? "";
   const source = bookingSourceFor(ce.appointmentId ?? ce.eventId);
 
-  if (scheduledBy) {
-    const staffBooking =
-      source === "opus"
+  if (scheduledBy || ce.contact?.staffInitiated) {
+    const staffBooking = !appt
+      ? { reason: "created by Forte staff in Opus", skipReason: "created_by_opus_staff" }
+      : source === "opus"
         ? { reason: "booked by Forte staff in Opus", skipReason: "scheduled_by_opus_staff" }
         : {
             reason: "appointment scheduled by logged-in Acuity user",
@@ -158,7 +171,7 @@ export async function POST(req: NextRequest) {
           status: "SKIPPED",
           attempts: { increment: 1 },
           lastAttemptAt: new Date(),
-          responseBody: `Skipped outbound: ${staffBooking.reason} (${scheduledBy})`,
+          responseBody: `Skipped outbound: ${staffBooking.reason}${scheduledBy ? ` (${scheduledBy})` : ""}`,
         },
       });
     }
@@ -181,18 +194,21 @@ export async function POST(req: NextRequest) {
 
   const eventSourceUrl = attrib?.lastUrl ?? "https://virtu.academy";
   const eventId = ce.appointmentId ?? ce.eventId;
-  const email = appt?.email ?? null;
-  const phone = appt?.phone ?? null;
-  // Opus bookings have no ingest session; their IP and user agent arrive on the Attribution row.
-  // Acuity sends keep using the session only.
-  const opusAttrib = source === "opus" ? attrib : null;
-  const ip = session?.ipFirst ?? opusAttrib?.ipAddress ?? null;
-  const userAgent = session?.uaFirst ?? opusAttrib?.userAgent ?? null;
+  const email = contact?.email ?? null;
+  const phone = contact?.phone ?? null;
+  // An Opus or page event's own Attribution row carries an IP and user agent, for when it has
+  // no ingest session or the session lacks one. Acuity sends keep using the session only.
+  const ownAttrib = source === "acuity" ? null : attrib;
+  const ip = session?.ipFirst ?? ownAttrib?.ipAddress ?? null;
+  const userAgent = session?.uaFirst ?? ownAttrib?.userAgent ?? null;
   const mockOutbound = process.env.OUTBOUND_MODE === "mock";
+  // Opus and page events may only reach the platforms their setting lists; Acuity has none.
+  const platformsSetting = deliveryPlatformsSetting(source);
   let retry = false;
 
   for (const d of ce.deliveries) {
     if (d.status === "SUCCESS" || d.status === "SKIPPED") continue;
+    if (d.notBefore && d.notBefore.getTime() - Date.now() > HOLD_TOLERANCE_MS) continue;
 
     const mark = async (patch: {
       status: "SUCCESS" | "FAILED" | "SKIPPED";
@@ -213,14 +229,12 @@ export async function POST(req: NextRequest) {
       });
     };
 
-    // Opus bookings may only reach the platforms enabled now, whatever rows exist.
-    if (
-      source === "opus" &&
-      !isOpusDeliveryEnabled(d.platform, process.env.OPUS_DELIVERY_PLATFORMS)
-    ) {
+    // Opus and page events may only reach the platforms enabled now, whatever rows exist.
+    if (platformsSetting && !isDeliveryEnabled(d.platform, process.env[platformsSetting])) {
+      const sourceName = source === "opus" ? "Opus" : "Page";
       await mark({
         status: "SKIPPED",
-        responseBody: `Opus delivery to ${d.platform} is off (not an Opus platform, or not listed in OPUS_DELIVERY_PLATFORMS)`,
+        responseBody: `${sourceName} delivery to ${d.platform} is off (not ${source === "opus" ? "an Opus" : "a page"} platform, or not listed in ${platformsSetting})`,
       });
       continue;
     }
@@ -259,14 +273,14 @@ export async function POST(req: NextRequest) {
             eventId,
             eventName: ce.name,
             eventTime: ce.eventTime,
-            // An Opus booking's page address goes without its query string and fragment: the
-            // click ID and UTMs travel in their own fields, and a landing link can carry
+            // An Opus or page event's page address goes without its query string and fragment:
+            // the click ID and UTMs travel in their own fields, and a landing link can carry
             // personal details. Acuity sends keep the address as stored.
-            eventSourceUrl: source === "opus" ? originAndPath(eventSourceUrl) : eventSourceUrl,
+            eventSourceUrl: source === "acuity" ? eventSourceUrl : originAndPath(eventSourceUrl),
             email,
             phone,
-            firstName: appt?.firstName ?? null,
-            lastName: appt?.lastName ?? null,
+            firstName: contact?.firstName ?? null,
+            lastName: contact?.lastName ?? null,
             ip,
             userAgent,
             fbc: appt?.fbc ?? attrib?.fbc ?? null,
@@ -275,8 +289,12 @@ export async function POST(req: NextRequest) {
             value: ce.value ?? null,
             currency: ce.currency ?? null,
             customData: {
-              appointment_id: ce.appointmentId,
-              appointment_type_id: appt?.appointmentTypeId ?? null,
+              ...(ce.appointmentId
+                ? {
+                    appointment_id: ce.appointmentId,
+                    appointment_type_id: appt?.appointmentTypeId ?? null,
+                  }
+                : {}),
               utm_campaign: attrib?.utmCampaign ?? null,
               utm_source: attrib?.utmSource ?? null,
               utm_medium: attrib?.utmMedium ?? null,
@@ -349,13 +367,31 @@ export async function POST(req: NextRequest) {
             gclid: appt?.gclid ?? attrib?.gclid ?? null,
             email,
             phone,
-            firstName: appt?.firstName ?? null,
-            lastName: appt?.lastName ?? null,
+            firstName: contact?.firstName ?? null,
+            lastName: contact?.lastName ?? null,
             userIpAddress: ip,
             source,
           });
           if (r.skipped) {
             await mark({ status: "SKIPPED", responseBody: r.reason });
+          } else if (!r.ok && r.tooRecent && d.attempts < TOO_RECENT_MAX_ATTEMPTS) {
+            // The click is under six hours old. That is no failure: hold the delivery and
+            // upload again later. If the later message cannot be scheduled, the thrown error
+            // marks it FAILED below and asks the queue to retry this message instead.
+            const retryAt = googleAdsRetryAfterTooRecent();
+            await enqueueDelivery(ce.id, retryAt);
+            await prisma.delivery.update({
+              where: { id: d.id },
+              data: {
+                status: "PENDING",
+                notBefore: retryAt,
+                attempts: { increment: 1 },
+                lastAttemptAt: new Date(),
+                responseCode: r.status,
+                responseBody: `Held until ${retryAt.toISOString()}: Google answered TOO_RECENT_EVENT. ${r.body}`,
+                requestBody: r.requestBody,
+              },
+            });
           } else {
             // A validate-only upload is checked by Google but records no conversion.
             const validatedOnly = r.ok && r.validateOnly;

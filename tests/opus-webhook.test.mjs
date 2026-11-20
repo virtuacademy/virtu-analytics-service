@@ -84,6 +84,7 @@ function sign(raw, timestamp = Math.floor(Date.now() / 1000), secret = SECRET) {
 function webhook(options = {}) {
   const committed = [];
   const ingestLookups = [];
+  const eventLookups = [];
   const queued = [];
   const env = {
     OPUS_WEBHOOK_SECRET: SECRET,
@@ -104,12 +105,18 @@ function webhook(options = {}) {
         appointment: { create: write(writes, "appointment") },
         attribution: { create: write(writes, "attribution") },
         canonicalEvent: { create: write(writes, "canonicalEvent", { id: "ce_1" }) },
+        eventContact: { create: write(writes, "eventContact") },
         delivery: { createMany: write(writes, "delivery") },
       });
       committed.push(...writes);
       return result;
     },
-    canonicalEvent: { findFirst: async () => options.existing ?? null },
+    canonicalEvent: {
+      findFirst: async ({ where }) => {
+        eventLookups.push(where);
+        return options.existing ?? null;
+      },
+    },
     // The visitor's ingest rows, read before the transaction.
     attribution: {
       findUnique: async ({ where }) => {
@@ -126,7 +133,21 @@ function webhook(options = {}) {
       },
       zod,
       "@/lib/prisma": { prisma },
-      "@/lib/qstash": { enqueueDelivery: async (id) => queued.push(id) },
+      // A new event is queued with queueDeliveries, a resend's leftovers with enqueueDelivery.
+      "@/lib/qstash": {
+        enqueueDelivery: async (id) => queued.push(id),
+        queueDeliveries: async (id) => queued.push(id),
+      },
+      "@/lib/adEvents": loadTsModule(
+        new URL("../src/lib/adEvents.ts", import.meta.url),
+        {},
+        { process: { env } },
+      ),
+      "@/lib/googleAdsHold": loadTsModule(
+        new URL("../src/lib/googleAdsHold.ts", import.meta.url),
+        {},
+        { process: { env } },
+      ),
       ...libs,
     },
     { process: { env } },
@@ -136,7 +157,19 @@ function webhook(options = {}) {
     return POST({ text: async () => raw, headers: new Headers(headers ?? sign(raw)) });
   };
   const rows = (table) => committed.filter((w) => w.table === table).map((w) => w.data);
-  return { send, committed, queued, rows, ingestLookups };
+  return { send, committed, queued, rows, ingestLookups, eventLookups };
+}
+
+// An account created in Opus: no booking, an `account` with the user's ID.
+function accountPayload(overrides = {}) {
+  const body = payload({
+    type: "account.created",
+    eventId: "opus_account_user-1",
+    account: { userId: "user-1" },
+    ...overrides,
+  });
+  delete body.booking;
+  return body;
 }
 
 test("a signed trial booking is recorded once and queued for Google Ads and HubSpot", async () => {
@@ -225,6 +258,9 @@ test("bodies outside the contract are rejected without writes", async () => {
     payload({ occurredAt: "yesterday" }),
     payload({ attribution: { landingUrl: `https://app.fortelessons.com/${"x".repeat(2048)}` } }),
     { ...payload(), booking: undefined },
+    accountPayload({ eventId: "opus_user-1" }),
+    accountPayload({ eventId: "opus_account_bad id", account: { userId: "bad id" } }),
+    { ...accountPayload(), account: undefined },
   ]) {
     const w = webhook();
     const response = await w.send(body);
@@ -252,6 +288,9 @@ test("a resend is deduplicated and requeues only deliveries left unattempted for
     [minutesAgo(11), [{ status: "PENDING", attempts: 0 }], true],
     [minutesAgo(11), [{ status: "SUCCESS", attempts: 1 }], false],
     [minutesAgo(11), [{ status: "FAILED", attempts: 1 }], false],
+    // Held for Google: its later message is still to come, until that time is well past.
+    [minutesAgo(11), [{ status: "PENDING", attempts: 0, notBefore: minutesAgo(-300) }], false],
+    [minutesAgo(400), [{ status: "PENDING", attempts: 0, notBefore: minutesAgo(11) }], true],
   ]) {
     const w = webhook({
       failOn: "appointment",
@@ -508,4 +547,191 @@ test("Meta gets an Opus booking whether or not it is linked to a visit", async (
       name,
     );
   }
+});
+
+test("a new account is its own event with no appointment, sent to Google Ads and Meta only", async () => {
+  for (const [type, name] of [
+    ["account.created", "ACCOUNT_CREATED"],
+    ["teacher_account.created", "TEACHER_ACCOUNT_CREATED"],
+  ]) {
+    const w = webhook({ env: { OPUS_DELIVERY_PLATFORMS: "GOOGLE_ADS,HUBSPOT,META" } });
+    const response = await w.send(accountPayload({ type }));
+    assert.equal(response.status, 200, type);
+    assert.equal(response.body.eventId, "opus_account_user-1");
+
+    assert.equal(w.rows("inboundWebhook")[0].action, type);
+    // Nothing the dashboard or HubSpot delivery would read as a booking.
+    assert.equal(w.rows("appointment").length, 0);
+    assert.equal(w.rows("attribution")[0].token, "opus_account_user-1");
+    assert.equal(w.rows("attribution")[0].gclid, "G-1");
+
+    const [event] = w.rows("canonicalEvent");
+    assert.equal(event.name, name);
+    assert.equal(event.appointmentId, null);
+    assert.equal(event.attributionTok, "opus_account_user-1");
+    assert.equal(event.eventTime.toISOString(), "2026-11-04T18:22:05.000Z");
+
+    assert.deepEqual(
+      { ...w.rows("eventContact")[0] },
+      {
+        canonicalEventId: "ce_1",
+        email: "parent@example.com",
+        phone: "+15555550123",
+        firstName: "Pat",
+        lastName: "Example",
+        vaAttrib: null,
+        staffInitiated: false,
+      },
+    );
+
+    // No HubSpot row: Opus writes these contacts to HubSpot itself.
+    assert.deepEqual(
+      Array.from(w.rows("delivery")[0], (d) => [d.platform, d.status]),
+      [
+        ["GOOGLE_ADS", "PENDING"],
+        ["META", "PENDING"],
+      ],
+    );
+    assert.deepEqual(w.queued, ["ce_1"]);
+  }
+});
+
+test("a resent account writes nothing, and the same user as family and teacher is a conflict", async () => {
+  const duplicate = Object.assign(new Error("Unique constraint failed"), { code: "P2002" });
+  const resent = webhook({
+    failOn: "attribution",
+    error: duplicate,
+    existing: { id: "ce_existing", createdAt: new Date(), deliveries: [] },
+  });
+  const response = await resent.send(accountPayload());
+  assert.equal(response.status, 200);
+  assert.equal(response.body.deduped, true);
+  assert.equal(resent.committed.length, 0);
+  assert.equal(resent.queued.length, 0);
+  // Found by its own name, so a teacher event never passes for the family one.
+  assert.deepEqual(
+    { ...resent.eventLookups[0] },
+    {
+      eventId: "opus_account_user-1",
+      name: "ACCOUNT_CREATED",
+    },
+  );
+
+  const other = webhook({ failOn: "attribution", error: duplicate, existing: null });
+  const conflict = await other.send(accountPayload({ type: "teacher_account.created" }));
+  assert.equal(conflict.status, 409);
+  assert.equal(other.eventLookups[0].name, "TEACHER_ACCOUNT_CREATED");
+  assert.equal(other.committed.length, 0);
+});
+
+test("an account stays off Meta until it is listed, and staff accounts are never delivered", async () => {
+  // The default test setting lists Google Ads and HubSpot only.
+  const off = webhook();
+  await off.send(accountPayload());
+  const meta = off.rows("delivery")[0].find((d) => d.platform === "META");
+  assert.equal(meta.status, "SKIPPED");
+  assert.match(meta.responseBody, /OPUS_DELIVERY_PLATFORMS/);
+
+  const staff = webhook({ env: { OPUS_DELIVERY_PLATFORMS: "GOOGLE_ADS,META" } });
+  const response = await staff.send(accountPayload({ flags: { staffInitiated: true } }));
+  assert.equal(response.body.skippedOutbound, true);
+  assert.equal(staff.rows("eventContact")[0].staffInitiated, true);
+  assert.equal(staff.rows("delivery").length, 0);
+  assert.equal(staff.queued.length, 0);
+});
+
+test("an account's value comes from EVENT_VALUES, and none is stored without an entry", async () => {
+  const env = { EVENT_VALUES: "opus:ACCOUNT_CREATED=15, opus:TEACHER_ACCOUNT_CREATED=20.5" };
+  for (const [type, value, currency] of [
+    ["account.created", 15, "USD"],
+    ["teacher_account.created", 20.5, "USD"],
+  ]) {
+    const w = webhook({ env });
+    await w.send(accountPayload({ type }));
+    assert.equal(w.rows("canonicalEvent")[0].value, value);
+    assert.equal(w.rows("canonicalEvent")[0].currency, currency);
+  }
+  const unset = webhook({ env: { EVENT_VALUES: "page:CALLBACK_REQUESTED=15" } });
+  await unset.send(accountPayload());
+  assert.equal(unset.rows("canonicalEvent")[0].value, null);
+  assert.equal(unset.rows("canonicalEvent")[0].currency, null);
+  // A booking keeps the price Opus sent.
+  const booking = webhook({ env });
+  await booking.send(payload());
+  assert.equal(booking.rows("canonicalEvent")[0].value, 35);
+});
+
+test("an account with no click ID and no email or phone is recorded but not delivered", async () => {
+  const noClick = { gclid: null, gbraid: null, wbraid: null, fbclid: null, ttclid: null };
+  const env = { OPUS_DELIVERY_PLATFORMS: "GOOGLE_ADS,META" };
+  const nothing = webhook({ env });
+  await nothing.send(
+    accountPayload({ contact: { email: null, phone: null }, attribution: { click: noClick } }),
+  );
+  for (const delivery of nothing.rows("delivery")[0]) {
+    assert.equal(delivery.status, "SKIPPED");
+    assert.match(delivery.responseBody, /No click ID and no contact details/);
+  }
+  assert.equal(nothing.queued.length, 0);
+
+  // Either one is enough.
+  for (const overrides of [
+    { attribution: { click: noClick } },
+    { contact: { email: null, phone: null } },
+  ]) {
+    const w = webhook({ env });
+    await w.send(accountPayload(overrides));
+    assert.deepEqual(
+      Array.from(w.rows("delivery")[0], (d) => d.status),
+      ["PENDING", "PENDING"],
+    );
+  }
+});
+
+test("a Google Ads delivery waits six and a quarter hours after the visit's last touch", async () => {
+  const minutesAgo = (minutes) => new Date(Date.now() - minutes * 60 * 1000);
+  const HOLD_MS = 375 * 60 * 1000;
+  const notBeforeOf = (w, platform) =>
+    w.rows("delivery")[0].find((d) => d.platform === platform).notBefore;
+  const sendNow = (w, lastTouchAt, more = {}) =>
+    w.send(
+      payload({
+        occurredAt: new Date().toISOString(),
+        attribution: { lastTouchAt: lastTouchAt.toISOString(), ...more },
+      }),
+    );
+
+  // A booking minutes after the ad click: held, not uploaded and rejected as too recent.
+  const lastTouch = minutesAgo(10);
+  const fresh = webhook();
+  await sendNow(fresh, lastTouch);
+  assert.equal(notBeforeOf(fresh, "GOOGLE_ADS").getTime(), lastTouch.getTime() + HOLD_MS);
+  // Only Google has the rule.
+  assert.equal(notBeforeOf(fresh, "HUBSPOT"), null);
+
+  // The click ID can come from the ingest row or from Opus's own capture, so the later touch counts.
+  const ingestTouch = minutesAgo(3);
+  const linked = webhook({
+    ingestRows: { [INGEST_TOKEN]: { ...ingestRow, lastTouchAt: ingestTouch } },
+  });
+  await sendNow(linked, minutesAgo(90), { vaAttrib: INGEST_TOKEN });
+  assert.equal(notBeforeOf(linked, "GOOGLE_ADS").getTime(), ingestTouch.getTime() + HOLD_MS);
+
+  // An old click goes at once, and so does everything with the hold switched off.
+  const old = webhook();
+  await sendNow(old, minutesAgo(400));
+  assert.equal(notBeforeOf(old, "GOOGLE_ADS"), null);
+  const off = webhook({ env: { GOOGLE_ADS_HOLD_MINUTES: "0" } });
+  await sendNow(off, lastTouch);
+  assert.equal(notBeforeOf(off, "GOOGLE_ADS"), null);
+
+  // An account is held the same way.
+  const account = webhook();
+  await account.send(
+    accountPayload({
+      occurredAt: new Date().toISOString(),
+      attribution: { lastTouchAt: lastTouch.toISOString() },
+    }),
+  );
+  assert.equal(notBeforeOf(account, "GOOGLE_ADS").getTime(), lastTouch.getTime() + HOLD_MS);
 });

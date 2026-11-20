@@ -152,51 +152,55 @@ test("attrib's own cookies still win over body IDs on virtu.academy", async () =
   assert.equal(result.token, cookieIds.va_attrib);
 });
 
-test("an Acuity intake va_attrib naming an Opus token is ignored", async () => {
-  const appointments = [];
-  const events = [];
-  const { POST } = loadTsModule(
-    new URL("../src/app/api/webhooks/acuity/route.ts", import.meta.url),
-    {
-      "next/server": nextServer,
-      "@/lib/auth": { timingSafeEqual: () => true },
-      "@/lib/crypto": { sha256Base64: () => "sig", sha256Hex: () => "hash" },
-      "@/lib/acuity": {
-        fetchAppointmentById: async () => ({ id: 123, appointmentTypeID: 456 }),
-        extractIntakeValue: (_appt, fieldId) => (fieldId === 111 ? "opus_lesson-1" : null),
-        appointmentSnapshot: () => ({ scheduledBy: null }),
-      },
-      "@/lib/qstash": { enqueueDelivery: async () => {} },
-      "@/lib/bookingSource": bookingSource,
-      "@/lib/prisma": {
-        prisma: {
-          inboundWebhook: { create: async () => {} },
-          appointment: { upsert: async (args) => appointments.push(args) },
-          canonicalEvent: {
-            create: async (args) => {
-              events.push(args.data);
-              return { id: "ce1" };
+test("an Acuity intake va_attrib naming an Opus or page event's token is ignored", async () => {
+  for (const eventToken of ["opus_lesson-1", "page_callback_0b6c5a1e"]) {
+    const appointments = [];
+    const events = [];
+    const env = {
+      ACUITY_API_KEY: "synthetic",
+      ACUITY_FIELD_VA_ATTRIB_ID: "111",
+      ACUITY_TRIAL_APPOINTMENT_TYPE_IDS: "456",
+    };
+    const { POST } = loadTsModule(
+      new URL("../src/app/api/webhooks/acuity/route.ts", import.meta.url),
+      {
+        "next/server": nextServer,
+        "@/lib/auth": { timingSafeEqual: () => true },
+        "@/lib/crypto": { sha256Base64: () => "sig", sha256Hex: () => "hash" },
+        "@/lib/acuity": {
+          fetchAppointmentById: async () => ({ id: 123, appointmentTypeID: 456 }),
+          extractIntakeValue: (_appt, fieldId) => (fieldId === 111 ? eventToken : null),
+          appointmentSnapshot: () => ({ scheduledBy: null }),
+        },
+        "@/lib/qstash": { queueDeliveries: async () => {} },
+        "@/lib/bookingSource": bookingSource,
+        "@/lib/googleAdsHold": loadTsModule(
+          new URL("../src/lib/googleAdsHold.ts", import.meta.url),
+          {},
+          { process: { env } },
+        ),
+        "@/lib/prisma": {
+          prisma: {
+            inboundWebhook: { create: async () => {} },
+            appointment: { upsert: async (args) => appointments.push(args) },
+            canonicalEvent: {
+              create: async (args) => {
+                events.push(args.data);
+                return { id: "ce1" };
+              },
+              findFirst: async () => null,
             },
-            findFirst: async () => null,
+            delivery: { createMany: async () => {} },
           },
-          delivery: { createMany: async () => {} },
         },
       },
-    },
-    {
-      process: {
-        env: {
-          ACUITY_API_KEY: "synthetic",
-          ACUITY_FIELD_VA_ATTRIB_ID: "111",
-          ACUITY_TRIAL_APPOINTMENT_TYPE_IDS: "456",
-        },
-      },
-    },
-  );
-  await POST({
-    headers: new Headers({ "x-acuity-signature": "sig" }),
-    text: async () => "action=scheduled&id=123",
-  });
-  assert.equal(appointments[0].create.vaAttrib, null);
-  assert.equal(events[0].attributionTok, null);
+      { process: { env } },
+    );
+    await POST({
+      headers: new Headers({ "x-acuity-signature": "sig" }),
+      text: async () => "action=scheduled&id=123",
+    });
+    assert.equal(appointments[0].create.vaAttrib, null, eventToken);
+    assert.equal(events[0].attributionTok, null, eventToken);
+  }
 });
