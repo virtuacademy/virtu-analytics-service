@@ -14,6 +14,11 @@ export function bookingSourceFor(eventId: string | null | undefined): BookingSou
   return "acuity";
 }
 
+/** Whether a token is one this service mints for an event, which no browser may hand back. */
+export function isEventToken(token: string | null | undefined): boolean {
+  return bookingSourceFor(token) !== "acuity";
+}
+
 // Opus bookings are only ever delivered to these platforms.
 export const OPUS_DELIVERY_PLATFORMS = ["GOOGLE_ADS", "HUBSPOT", "META"] as const;
 export type OpusDeliveryPlatform = (typeof OPUS_DELIVERY_PLATFORMS)[number];
