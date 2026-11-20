@@ -37,7 +37,7 @@ the visitor its outcome.
 
 | Status | Body | Meaning |
 | --- | --- | --- |
-| 200 | `{ "ok": true }` | Recorded. Also the answer when the event is recorded but will not be delivered (see below) |
+| 200 | `{ "ok": true }` | Accepted and recorded. Also the answer when a rule refused the request and nothing was written (see below) |
 | 400 | `{ "ok": false, "error" }` | Not JSON, or a body outside the contract |
 | 403 | `{ "ok": false, "error" }` | The `Origin` header is missing or not in `ALLOWED_ORIGINS` |
 | 404 | `{ "ok": false, "error" }` | No visit has this token |
@@ -45,66 +45,80 @@ the visitor its outcome.
 | 500 | `{ "ok": false, "error" }` | Database error |
 
 An answer never repeats anything the caller sent, carries no ID, and does not say whether the
-event will be delivered.
+event was accepted.
 
 ## What bounds abuse
 
 Nothing here can prove a person sent the request. Anyone can call the endpoint, a script can
 send any `Origin` header, and anyone can get a visit token by loading the page. So the rules do
 not try to tell people from scripts. They limit what one visit and one address can have
-delivered, leave a record of every event that was refused, and raise an alarm when the day's
-volume looks wrong.
+accepted, write nothing for a request they refuse, and raise an alarm when the day's volume
+looks wrong.
 
-An event is **recorded but delivered nowhere** (every delivery `SKIPPED` with the reason) when:
+A request is **refused, and nothing is written** (no event, no contact row, no delivery), when:
 
-- **Duplicate.** The same visit already reported this event in the last 24 hours. Any earlier
-  event counts, a refused one included, so repeated posts keep the window open.
 - **Stale visit.** The visit was last seen more than 24 hours ago. A token harvested earlier
   stops working.
-- **Nothing to match.** The visit has no ad click ID and the event carries neither an email nor
-  a phone number.
-- **Limit per address.** `PAGE_EVENT_DAILY_LIMIT_PER_IP` (default 3) events from the caller's
-  address were already accepted for delivery in the last 24 hours. An IPv4 address counts by
-  itself and an IPv6 address by its /64 network, since one IPv6 connection usually holds a whole
-  /64 and could otherwise rotate through it. The address is taken as ingest takes it (first
+- **Nothing to match.** The visit has no ad click ID and the request carries neither an email
+  nor a phone number.
+- **Duplicate.** A callback for the same visit was accepted in the last 24 hours.
+- **Limit per address.** `PAGE_EVENT_DAILY_LIMIT_PER_IP` (default 3) callbacks from the
+  caller's address were accepted in the last 24 hours. An IPv4 address counts by itself and an
+  IPv6 address by its /64 network, since one IPv6 connection usually holds a whole /64 and could
+  otherwise rotate through it. The address is taken as ingest takes it (first
   `X-Forwarded-For` entry, else `X-Real-IP`), so it is only as trustworthy as the proxy in front
   of this service. Requests with no address share one allowance.
 
-Each of these is about the visit or the address that sent the event. **Nothing other visitors
-do can refuse an event:** there is no limit shared by everyone, because a shared limit would
-let a few forged requests a day stop every real callback, and a skipped delivery is never sent
+Such a request is answered `200 { "ok": true }` like an accepted one, and one line is logged
+with the reason and nothing of the caller's: `[page-events] refused callback.requested: its
+visit already reported one in the last 24 hours`. Because a refused request leaves no row,
+both counting rules count accepted callbacks only, and a flood of refused requests cannot fill
+the database: each costs a few reads.
+
+"Accepted" means recorded. A callback accepted while `PAGE_DELIVERY_PLATFORMS` is empty is
+recorded with its deliveries `SKIPPED`, and it counts for its visit and its address like any
+other.
+
+Each rule is about the visit or the address that sent the request. **Nothing other visitors do
+can refuse a callback:** there is no limit shared by everyone, because a shared limit would let
+a few forged requests a day stop every real callback, and a skipped delivery is never sent
 later.
 
-**The alarm.** When more than `PAGE_EVENT_DAILY_ALERT_THRESHOLD` (default 25) page events,
-refused ones included, were recorded in the last 24 hours, every further one logs an error line
-for monitoring to find, and is still delivered:
+**The alarm.** When more than `PAGE_EVENT_DAILY_ALERT_THRESHOLD` (default 25) page events were
+accepted in the last 24 hours, every further one logs an error line for monitoring to find, and
+is still delivered:
 `[page-events] 26 page events in 24 hours, over PAGE_EVENT_DAILY_ALERT_THRESHOLD (25). Still
 delivering. If this is a flood, remove the platforms from PAGE_DELIVERY_PLATFORMS.` Real volume
 is a handful a week, so the line means either abuse or real volume that has outgrown the
-setting.
+setting. Refused requests are not in this count; they show as `refused` lines.
 
 **The brake.** To stop a flood, take the platforms out of `PAGE_DELIVERY_PLATFORMS` (empty
 records events without delivering them). Events recorded while it is off are never delivered
 later.
 
-A request is **refused outright** (nothing written) when its token names no recorded visit
-(tokens of other events, `opus_…` and `page_…`, are not UUIDs), its body is outside the
+A request is **refused outright** (4xx, nothing written) when its token names no recorded
+visit (tokens of other events, `opus_…` and `page_…`, are not UUIDs), its body is outside the
 contract, or its `Origin` is not listed. The `Origin` check is not a protection: it only keeps
 honest browsers on other sites out.
 
-Page events are checked and recorded one at a time (a database lock held for the transaction),
-so two requests at the same moment cannot both slip under a limit.
+**Requests at the same moment.** Every rule is checked twice: first without any lock, so
+refused requests stay cheap and never wait, then again inside the transaction that records the
+event. That transaction takes two database locks, one for the visit and one for the address
+(always in that order, so two requests can never wait on each other), which makes requests for
+the same visit, or from the same address, take turns. Requests that share neither do not wait
+at all: there is no lock shared by everyone, so no caller can hold up another visitor's
+callback.
 
 **What remains possible.** A script with many networks can forge callbacks, three a day from
-each address, until someone switches page delivery off; the alarm line is how that gets
-noticed. Each forged event carries whatever email the script typed, which goes to the ad
-platforms hashed. Google Ads counts such an event only if it matches one of the account's ad
-clicks. Every request that passes validation writes rows, refused events included, and there is
-no limit on that.
+each address, until someone takes the platforms out of `PAGE_DELIVERY_PLATFORMS`; the alarm
+line is how that gets noticed. Each forged event carries whatever email the script typed, which
+goes to the ad platforms hashed. Google Ads counts such an event only if it matches one of the
+account's ad clicks. Each accepted callback writes five rows, so what a flood can write is
+bounded by the same rules; there is no other rate limit.
 
 ## What gets recorded
 
-One transaction writes:
+For an accepted callback, one transaction writes:
 
 - `Attribution` with `token = eventId` (`page_callback_<uuid>`): the visit's ingest row copied
   as it stands, so later page views cannot change this conversion.
@@ -112,10 +126,11 @@ One transaction writes:
   `attributionTok = eventId`, and `value` from `EVENT_VALUES` (`page:CALLBACK_REQUESTED=<USD>`)
   or none.
 - `EventContact` with the contact fields, `vaAttrib` = the visit token and `ipAddress` = the
-  caller's address. No `Appointment` is written: the dashboard and HubSpot delivery would read
-  one as a booking.
-- `Delivery` rows for `GOOGLE_ADS` and `META` only. HubSpot gets nothing from here; the form
-  already wrote the contact.
+  caller's IPv4 address or IPv6 /64 network. No `Appointment` is written: the dashboard and
+  HubSpot delivery would read one as a booking.
+- `Delivery` rows for `GOOGLE_ADS` and `META` only: `PENDING`, or `SKIPPED` for a platform that
+  is not listed in `PAGE_DELIVERY_PLATFORMS`. HubSpot gets nothing from here; the form already
+  wrote the contact.
 
 ## Delivery
 
@@ -129,8 +144,9 @@ The QStash worker sends the deliveries, as for bookings (see
 - **Google Ads:** uploads to the action mapped as `page:CALLBACK_REQUESTED` in
   `GOOGLE_ADS_CONVERSION_ACTIONS`, with the visit's `gclid` and the hashed email and phone.
   Without the entry the delivery is `SKIPPED`; it never falls back to another action. The
-  upload waits until the click is old enough (see "Google Ads hold" in
-  [opus-trial-webhook.md](opus-trial-webhook.md#google-ads-hold)).
+  upload goes at once. If Google calls it too recent, which it may so soon after the ad click,
+  it is retried about six hours later (see "Google Ads: an upload called too recent" in
+  [opus-trial-webhook.md](opus-trial-webhook.md#google-ads-an-upload-called-too-recent)).
 - **Meta:** sends the event named by `page:CALLBACK_REQUESTED` in `META_CAPI_EVENT_NAMES`
   (suggested `Lead`). Without the entry the delivery is `SKIPPED`; there is no fallback name.
   It carries the visit's `fbc` (built from `fbclid` at ingest), the hashed email, phone and
@@ -144,8 +160,8 @@ The QStash worker sends the deliveries, as for bookings (see
 | --- | --- |
 | `ALLOWED_ORIGINS` | Must list the page's origin (`https://lessons.virtu.academy`). |
 | `PAGE_DELIVERY_PLATFORMS` | Comma list of `GOOGLE_ADS`, `META`. Empty means record only; this is also how to stop a flood. |
-| `PAGE_EVENT_DAILY_LIMIT_PER_IP` | Page events delivered per 24 hours from one IPv4 address or IPv6 /64 network. Default 3; `0` delivers none. |
-| `PAGE_EVENT_DAILY_ALERT_THRESHOLD` | Page events per 24 hours, from everyone, beyond which each one logs an error line. It never stops delivery. Default 25. |
+| `PAGE_EVENT_DAILY_LIMIT_PER_IP` | Page events accepted per 24 hours from one IPv4 address or IPv6 /64 network. Default 3; `0` accepts none. |
+| `PAGE_EVENT_DAILY_ALERT_THRESHOLD` | Accepted page events per 24 hours, from everyone, beyond which each one logs an error line. It never stops delivery. Default 25. |
 | `GOOGLE_ADS_CONVERSION_ACTIONS` | Add `page:CALLBACK_REQUESTED=<action id>`. |
 | `META_CAPI_EVENT_NAMES` | Add `page:CALLBACK_REQUESTED=<Meta event name>`. |
 | `EVENT_VALUES` | Optional `page:CALLBACK_REQUESTED=<USD amount>`. Without it no value is sent. |

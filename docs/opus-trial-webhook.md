@@ -256,8 +256,8 @@ one namespace, so a lesson ID must never begin with `account_`; Opus IDs are UUI
   and still has a delivery that is `PENDING` with no attempts, which repairs a request that
   recorded the event but failed to queue it. Within those 10 minutes the first request's queue
   message may still be on its way, and requeuing then could deliver twice. A Google Ads
-  delivery that is being held (see "Google Ads hold") counts only once its own time is more
-  than 10 minutes past: until then its later message is still to come.
+  delivery waiting for a too-recent retry (see below) has been attempted, so it is not
+  requeued.
 - Staff events add `"skippedOutbound": true` and a `skipReason` (`opus_staff_booking` or
   `opus_staff_account`).
 
@@ -284,7 +284,10 @@ One transaction writes:
 - `CanonicalEvent` `TRIAL_BOOKED` with `eventTime = occurredAt` and `value = valueCents / 100`.
 - `Delivery` rows for `GOOGLE_ADS`, `HUBSPOT` and `META` only. A platform not listed in
   `OPUS_DELIVERY_PLATFORMS` is written as `SKIPPED`, so Opus deliveries start switched off.
-  The `GOOGLE_ADS` row may carry a `notBefore` time (see "Google Ads hold").
+
+A booking writes only to tables and columns that existed before accounts and page events
+were added, and its delivery reads only those. It works on a database that does not have the
+`EventContact` table or the new event names yet.
 
 An account writes the same rows with these differences:
 
@@ -388,33 +391,41 @@ The existing QStash worker sends the deliveries.
 - An Opus event is only ever delivered to a platform that is `GOOGLE_ADS`, `HUBSPOT` or `META`
   and is listed in `OPUS_DELIVERY_PLATFORMS` when the worker runs; any other delivery row is
   marked `SKIPPED` without calling the platform.
-- `va_attrib` values shaped like `opus_…` are never accepted from a browser: ingest replaces a
-  cookie that is not one of its UUID tokens, and the Acuity webhook ignores such an intake
-  value.
+- `va_attrib` values shaped like `opus_…` or `page_…` (the tokens of recorded events) are never
+  accepted from a browser: ingest replaces a cookie that is not one of its UUID tokens, and the
+  Acuity webhook ignores such an intake value.
 
-### Google Ads hold
+### Google Ads: an upload called too recent
 
-Google rejects an upload for a click that is less than six hours old
-(`ConversionUploadError.TOO_RECENT_EVENT`: "Retry after 6 hours have passed"), and a signup or
-a booking often follows its ad click within minutes. So every Google Ads delivery, of every
-source (Acuity, Opus, page events), waits:
+Every Google Ads upload goes at once, for every source (Acuity, Opus, page events). Google's
+reference says an upload is refused while its click (`TOO_RECENT_EVENT`) or a newly created
+conversion action (`TOO_RECENT_CONVERSION_ACTION`) is under six hours old, "Retry after 6
+hours have passed". Production has not shown that refusal (21 uploads accepted and none
+refused between 2026-11-07 and 2026-11-20), so nothing is delayed up front. Only an upload
+Google actually refuses this way is tried again later:
 
-- **How long.** Until `GOOGLE_ADS_HOLD_MINUTES` (default 375: six hours and a quarter) after the
-  last moment the click could have happened. That is the visit's last recorded touch, or the
-  event's own time when it is earlier or no visit is known. For an Opus event the last touch is
-  the later of the ingest row's and Opus's own `attribution.lastTouchAt`, because the click ID
-  can come from either. A click already older than that goes at once. `0` switches the hold off.
-- **How.** The `GOOGLE_ADS` delivery row is written with `notBefore`, and a second queue
-  message is scheduled for that time. The message sent at once delivers the other platforms
-  and leaves the held row untouched (`PENDING`, no attempt).
-- **Fails open.** If the later message cannot be scheduled, the hold is lifted and the upload
-  goes with the message sent at once: an upload Google may reject beats one never attempted.
-- **`TOO_RECENT_EVENT` anyway.** The delivery stays `PENDING`, gets a new `notBefore` one hold
-  later (the default when the hold is off) and a new message for that time, at most four times;
-  after that it is `FAILED`. If that message cannot be scheduled, the delivery is marked
-  `FAILED` and the worker answers 503 so QStash retries the current one.
-- A booking's conversion time is still when it was booked; only the upload is later.
-- Not covered: a `CLICK_NOT_FOUND` answer still counts as `SUCCESS`, as before.
+- **When.** Google's answer consists of those two codes and nothing else. Any other error
+  beside them is a plain failure, as before.
+- **What happens.** The delivery stays `PENDING`. Its `responseBody` starts with the marker
+  `TOO_RECENT_RETRY n/4`, `attempts` goes up by one, `lastAttemptAt` is set, and one queue
+  message is scheduled 6 hours 15 minutes later. No new column carries any of this.
+- **The later message names the platform** (`{ "canonicalEventId", "platform": "GOOGLE_ADS" }`)
+  and a run for it touches only that event's Google Ads deliveries. An ordinary message tries
+  every `FAILED` delivery of the event again, and a HubSpot event has no idempotency key. No
+  other platform name and no other field is accepted.
+- **Until it is due,** any other run for the event (a queue retry for another platform, a
+  resend) leaves the waiting delivery alone, so it cannot use up the retries. "Due" is 6 hours
+  10 minutes after `lastAttemptAt`: five minutes less than the delay, so the delivery's own
+  message never comes too early by this server's clock.
+- **At most four retries.** If Google still calls the fourth too recent, the delivery is
+  `FAILED`.
+- **If the later message cannot be queued,** the delivery is `FAILED` with that reason and an
+  error is logged.
+- **The queue is not asked to retry** the message that got the answer: the worker answers 200.
+- A lost later message leaves that one delivery `PENDING` for good. Nothing sweeps it.
+- A retried Acuity upload reads the visit as it is at retry time, as an immediate upload
+  does. Opus and page events keep a frozen copy of the visit.
+- A `CLICK_NOT_FOUND` answer still counts as `SUCCESS`, as before.
 
 ### Rollout
 
@@ -434,13 +445,14 @@ Never give an older version an `opus:` entry: there every entry counts as a mapp
 events that rely on the built-in names stop being sent. And never run with `META` on and no
 `opus:TRIAL_BOOKED` name: the worker records each qualifying booking as `SKIPPED`.
 
-For the Google Ads hold and for accounts:
+For accounts:
 
 1. Bring the database up to date (`npx prisma migrate deploy`) before this version deploys.
-   The worker and both webhooks read the new `Delivery.notBefore` column and `EventContact`
-   table for every event, Acuity's included, and fail without them.
+   Accounts and page events need the new event names and the `EventContact` table. If the
+   version deploys first, only those new events fail (answered 500, nothing written, so a
+   resend records them later); bookings are recorded and delivered as before.
 2. Create the two Google Ads conversion actions at least six hours before the first event
-   (`TOO_RECENT_CONVERSION_ACTION`), then add `opus:ACCOUNT_CREATED=<id>` and
+   (a too-recent action costs retries), then add `opus:ACCOUNT_CREATED=<id>` and
    `opus:TEACHER_ACCOUNT_CREATED=<id>` to `GOOGLE_ADS_CONVERSION_ACTIONS`, and the two names to
    `META_CAPI_EVENT_NAMES`, keeping every entry already there.
 3. An account recorded before its entry exists is `SKIPPED` and never delivered later.
@@ -454,6 +466,5 @@ For the Google Ads hold and for accounts:
 | `GOOGLE_ADS_CONVERSION_ACTIONS` | attrib | Add `opus:TRIAL_BOOKED=7889634403`, and `opus:ACCOUNT_CREATED=<id>` and `opus:TEACHER_ACCOUNT_CREATED=<id>` for accounts. |
 | `META_CAPI_EVENT_NAMES` | attrib | Add `opus:TRIAL_BOOKED=<Meta event name>`, and `opus:ACCOUNT_CREATED=<name>` and `opus:TEACHER_ACCOUNT_CREATED=<name>` for accounts. An event with no entry is not sent to Meta. |
 | `EVENT_VALUES` | attrib | Optional USD values for events that carry none: `opus:ACCOUNT_CREATED=15,opus:TEACHER_ACCOUNT_CREATED=15`. Without an entry no value is sent. |
-| `GOOGLE_ADS_HOLD_MINUTES` | attrib | Minutes a Google Ads upload waits after the visit's last touch. Default 375; `0` is off. |
 | `ATTRIB_WEBHOOK_URL` | Opus | Full endpoint URL. Opus sends nothing without it. |
 | `ATTRIB_WEBHOOK_SECRET` | Opus | Same value as `OPUS_WEBHOOK_SECRET`. |

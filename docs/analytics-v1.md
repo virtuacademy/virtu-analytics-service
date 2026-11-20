@@ -73,7 +73,7 @@ Why this matters:
 
 Public (CORS-protected):
 - `POST /api/attrib/ingest` (also supports `OPTIONS` preflight). Optional body fields `vid`, `sid` and `attribTok` let a site that never receives this service's cookies (www.fortelessons.com) send back the IDs from an earlier response; each is used only when its cookie is missing and only if UUID-shaped, otherwise a fresh ID is issued. A `va_attrib` cookie that is not a UUID is also replaced. See [the ingest contract](opus-trial-webhook.md#ingest-contract-for-the-marketing-site).
-- `POST /api/attrib/event` (also supports `OPTIONS` preflight). A page reports a callback request for a visit it holds the token of. Nothing can prove a person sent it, so what one caller can have delivered is limited: one per visit and a few per address per 24 hours, and only for a visit seen in the last 24 hours. An unusual number of events in a day logs an error and is still delivered; `PAGE_DELIVERY_PLATFORMS` is the switch that stops a flood. See [page-events.md](page-events.md).
+- `POST /api/attrib/event` (also supports `OPTIONS` preflight). A page reports a callback request for a visit it holds the token of. Nothing can prove a person sent it, so what one caller can have delivered is limited: one per visit and a few per address per 24 hours, and only for a visit seen in the last 24 hours. A request a rule refuses writes nothing. An unusual number of accepted events in a day logs an error and is still delivered; `PAGE_DELIVERY_PLATFORMS` is the switch that stops a flood. See [page-events.md](page-events.md).
 
 Internal (signed):
 - `POST /api/webhooks/acuity` - verifies signature, fetches appointment, creates canonical events, queues deliveries.
@@ -110,7 +110,6 @@ See `.env.example` for the full list. Key values:
 - Opus: `OPUS_WEBHOOK_SECRET`, `OPUS_DELIVERY_PLATFORMS`
 - Page events: `PAGE_DELIVERY_PLATFORMS`, `PAGE_EVENT_DAILY_LIMIT_PER_IP` (default 3), `PAGE_EVENT_DAILY_ALERT_THRESHOLD` (default 25; an alarm, not a limit)
 - Accounts and page events: `EVENT_VALUES` (optional USD values, `source:EVENT=amount`)
-- Google Ads hold: `GOOGLE_ADS_HOLD_MINUTES` (default 375; `0` is off)
 - Google Ads: `GOOGLE_ADS_DEVELOPER_TOKEN`, OAuth creds, `GOOGLE_ADS_CUSTOMER_ID`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID`, `GOOGLE_ADS_CONVERSION_ACTION_ID(S)`, `GOOGLE_ADS_CONVERSION_ACTIONS` (per-event mapping), `GOOGLE_ADS_DEFAULT_PHONE_COUNTRY_CODE`, `GOOGLE_ADS_CONVERSION_TIMEZONE(_OFFSET)`, `GOOGLE_ADS_AD_USER_DATA_CONSENT`, `GOOGLE_ADS_AD_PERSONALIZATION_CONSENT` (currently ignored by code), optional `GOOGLE_ADS_VALIDATE_ONLY`/`GOOGLE_ADS_JOB_ID`
 - TikTok: `TIKTOK_PIXEL_ID`, `TIKTOK_ACCESS_TOKEN`, optional `TIKTOK_EVENT_ACTIONS`, `TIKTOK_TEST_EVENT_CODE`, `TIKTOK_DEFAULT_PHONE_COUNTRY_CODE`
 - Optional: `META_CAPI_TEST_SECRET`, `GOOGLE_ADS_TEST_SECRET`, `HUBSPOT_TEST_SECRET`, `TIKTOK_TEST_SECRET` (test endpoints)
@@ -336,7 +335,7 @@ Google Ads:
 - With `GOOGLE_ADS_VALIDATE_ONLY=true`, Google validates the upload but records no conversion; the delivery is marked `SKIPPED` (not `SUCCESS`) with a `GOOGLE_ADS_VALIDATE_ONLY:` response note.
 - `CLICK_NOT_FOUND` partial failures still count as `SUCCESS`; watch their rate in the response bodies.
 - Skips uploads with no click IDs and no user identifiers.
-- Every upload, Acuity's included, waits until `GOOGLE_ADS_HOLD_MINUTES` (default 375) after the visit's last touch, because Google rejects an upload for a click under six hours old. The delivery row carries the time as `notBefore` and a second queue message is scheduled for it; the other platforms are not delayed. A `TOO_RECENT_EVENT` answer puts the delivery back for later instead of failing it. See [the Google Ads hold](opus-trial-webhook.md#google-ads-hold).
+- Uploads go at once. One that Google refuses only as too recent (`TOO_RECENT_EVENT`, `TOO_RECENT_CONVERSION_ACTION`) stays `PENDING`, marked `TOO_RECENT_RETRY n/4` at the start of its response body, and is tried again 6 hours 15 minutes later by one queue message that names Google Ads and touches no other platform's delivery; after four such retries it is `FAILED`. See [an upload called too recent](opus-trial-webhook.md#google-ads-an-upload-called-too-recent).
 
 TikTok:
 - Uses Events API v1.3 with default mapping:
