@@ -59,6 +59,14 @@ function tooRecentRetriesOf(responseBody: string | null): number {
   return match ? Number(match[1]) : 0;
 }
 
+// The marker to keep at the start of a delivery's responseBody when it fails for another
+// reason (an outage, a rate limit, a thrown error), so the retries it has used are not
+// forgotten and the next too-recent answer continues the count instead of starting over.
+function tooRecentCountToKeep(responseBody: string | null): string {
+  const retries = tooRecentRetriesOf(responseBody);
+  return retries > 0 ? `${TOO_RECENT_MARKER}${retries}/${TOO_RECENT_MAX_RETRIES} used. ` : "";
+}
+
 function isWaitingForTooRecentRetry(delivery: {
   status: string;
   responseBody: string | null;
@@ -254,6 +262,8 @@ export async function POST(req: NextRequest) {
       responseBody?: string;
       requestBody?: string;
     }) => {
+      // A failed delivery may be tried again, so it keeps its count of too-recent retries.
+      const kept = patch.status === "FAILED" ? tooRecentCountToKeep(d.responseBody) : "";
       await prisma.delivery.update({
         where: { id: d.id },
         data: {
@@ -261,7 +271,7 @@ export async function POST(req: NextRequest) {
           attempts: { increment: 1 },
           lastAttemptAt: new Date(),
           responseCode: patch.responseCode,
-          responseBody: patch.responseBody,
+          responseBody: kept ? `${kept}${patch.responseBody ?? ""}` : patch.responseBody,
           requestBody: patch.requestBody,
         },
       });

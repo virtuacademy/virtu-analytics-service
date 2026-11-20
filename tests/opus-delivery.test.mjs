@@ -674,11 +674,68 @@ test("a too-recent upload is retried four times, then fails", async () => {
   const response = await fourth.invoke({ canonicalEventId: "ce_1", platform: "GOOGLE_ADS" });
   assert.equal(response.status, 200);
   assert.equal(fourth.statusOf("google").status, "FAILED");
+  // It keeps its count, so a later run that tries the failed delivery again starts no new round.
   assert.match(
     fourth.statusOf("google").responseBody,
-    /^Still too recent for Google after 4 retries/,
+    /^TOO_RECENT_RETRY 4\/4 used\. Still too recent for Google after 4 retries/,
   );
   assert.equal(fourth.retries.length, 0);
+});
+
+test("another failure between too-recent answers does not reset the count of retries", async () => {
+  // The Google Ads delivery as each run leaves it, six and a half hours passing in between.
+  let row = { id: "google", platform: "GOOGLE_ADS", status: "PENDING", attempts: 0 };
+  let queuedRetries = 0;
+  const run = async (options) => {
+    const w = worker({ ...options, deliveries: [row] });
+    const response = await w.invoke({ canonicalEventId: "ce_1", platform: "GOOGLE_ADS" });
+    const { attempts, ...written } = w.statusOf("google");
+    row = {
+      ...row,
+      ...written,
+      attempts: row.attempts + attempts.increment,
+      lastAttemptAt: minutesAgo(390),
+    };
+    queuedRetries += w.retries.length;
+    return response;
+  };
+  const marker = () => row.responseBody.match(/^TOO_RECENT_RETRY \d\/4/)?.[0];
+
+  await run(tooRecent);
+  assert.deepEqual([row.status, marker()], ["PENDING", "TOO_RECENT_RETRY 1/4"]);
+
+  // The retry meets an outage. The queue is asked to try again, and the count is kept.
+  const outage = await run({ google: { ok: false, status: 503, body: "upstream unavailable" } });
+  assert.equal(outage.status, 503);
+  assert.deepEqual([row.status, marker()], ["FAILED", "TOO_RECENT_RETRY 1/4"]);
+  assert.match(row.responseBody, /upstream unavailable/);
+
+  // Too recent again: the second retry, not the first once more.
+  await run(tooRecent);
+  assert.deepEqual([row.status, marker()], ["PENDING", "TOO_RECENT_RETRY 2/4"]);
+
+  // A thrown error and a rate limit in between change nothing either.
+  await run({ googleThrows: true });
+  assert.deepEqual([row.status, marker()], ["FAILED", "TOO_RECENT_RETRY 2/4"]);
+  await run({ google: { ok: false, status: 429, body: "slow down" } });
+  assert.deepEqual([row.status, marker()], ["FAILED", "TOO_RECENT_RETRY 2/4"]);
+
+  await run(tooRecent);
+  assert.equal(marker(), "TOO_RECENT_RETRY 3/4");
+  await run(tooRecent);
+  assert.deepEqual([row.status, marker()], ["PENDING", "TOO_RECENT_RETRY 4/4"]);
+
+  // The fifth too-recent answer is the end, with four retries queued in all.
+  const last = await run(tooRecent);
+  assert.equal(last.status, 200);
+  assert.equal(row.status, "FAILED");
+  assert.match(row.responseBody, /Still too recent for Google after 4 retries/);
+  assert.equal(queuedRetries, 4);
+
+  // A delivery that goes through drops the marker.
+  await run({});
+  assert.equal(row.status, "SUCCESS");
+  assert.equal(marker(), undefined);
 });
 
 test("a too-recent upload whose retry cannot be queued fails with the reason and an error line", async () => {

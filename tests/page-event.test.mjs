@@ -71,6 +71,7 @@ function endpoint(options = {}) {
   const errors = [];
   const lockKeys = [];
   let transactions = 0;
+  let databaseCalls = 0;
 
   // Advisory locks: one holder per key, the next waits for it.
   const lockTails = new Map();
@@ -97,19 +98,33 @@ function endpoint(options = {}) {
     });
   // Every read sees committed rows only.
   const contactReads = {
-    findFirst: async ({ where }) => contactsWhere(where)[0] ?? null,
-    count: async ({ where }) => contactsWhere(where).length,
+    findFirst: async ({ where }) => {
+      databaseCalls += 1;
+      return contactsWhere(where)[0] ?? null;
+    },
+    count: async ({ where }) => {
+      databaseCalls += 1;
+      return contactsWhere(where).length;
+    },
   };
   const prisma = {
-    attribution: { findUnique: async ({ where }) => visits[where.token] ?? null },
+    attribution: {
+      findUnique: async ({ where }) => {
+        databaseCalls += 1;
+        return visits[where.token] ?? null;
+      },
+    },
     eventContact: contactReads,
     canonicalEvent: {
-      count: async ({ where }) =>
-        db.events.filter(
+      count: async ({ where }) => {
+        databaseCalls += 1;
+        return db.events.filter(
           (event) => where.name.in.includes(event.name) && event.eventTime > where.eventTime.gt,
-        ).length,
+        ).length;
+      },
     },
     $transaction: async (run) => {
+      databaseCalls += 1;
       transactions += 1;
       const releases = [];
       const writes = { attributions: [], events: [], contacts: [], deliveries: [] };
@@ -206,6 +221,7 @@ function endpoint(options = {}) {
     errors,
     lockKeys,
     transactions: () => transactions,
+    databaseCalls: () => databaseCalls,
   };
 }
 
@@ -308,6 +324,41 @@ test("an unknown visit, another site and a body outside the contract are refused
     assert.ok(e.wroteNothing(), name);
     assert.equal(e.transactions(), 0, name);
     assert.equal(e.queued.length, 0, name);
+  }
+});
+
+test("contact text the database cannot store is a 400 before any database work", async () => {
+  // A NUL, another control character, or half of a surrogate pair. PostgreSQL refuses the
+  // first and the last, and only inside the transaction: after the locks, with nothing
+  // recorded, so no rule would ever start refusing a script that repeats it.
+  for (const [name, contact] of [
+    ["a NUL in the email", { email: "a\u0000b@example.com" }],
+    ["a NUL in the phone", { email: "parent@example.com", phone: "555\u0000" }],
+    ["a control character in the phone", { email: "parent@example.com", phone: "555\u0007555" }],
+    [
+      "a line break inside the first name",
+      { email: "parent@example.com", firstName: "Pat\nSmith" },
+    ],
+    ["a lone high surrogate", { email: "parent@example.com", firstName: "Pat\uD83C" }],
+    ["a lone low surrogate", { email: "parent@example.com", firstName: "\uDFB9Pat" }],
+  ]) {
+    const e = endpoint({ env: on });
+    const response = await e.send(callback({ contact }));
+    assert.equal(response.status, 400, name);
+    assert.equal(response.body.ok, false, name);
+    assert.equal(e.databaseCalls(), 0, name);
+    assert.ok(e.wroteNothing(), name);
+  }
+
+  // Ordinary text passes: accents, a whole emoji, and white space around a value.
+  for (const contact of [
+    { email: "zoe@example.com", firstName: "Zoë Müller" },
+    { email: "parent@example.com", firstName: "Pat 🎹" },
+    { email: " parent@example.com\n", phone: "\t(555) 555-0123 ", firstName: "Pat" },
+  ]) {
+    const e = endpoint({ env: on });
+    assert.equal((await e.send(callback({ contact }))).status, 200);
+    assert.equal(e.added().events.length, 1, JSON.stringify(contact));
   }
 });
 

@@ -38,13 +38,33 @@ const DEFAULT_DAILY_ALERT_THRESHOLD = 25;
 const EVENT_NAMES = { "callback.requested": "CALLBACK_REQUESTED" } as const;
 const PAGE_EVENT_NAMES = Object.values(EVENT_NAMES);
 
+// Whether a string holds a control character (a NUL above all, which PostgreSQL refuses to
+// store) or half of a surrogate pair. No name, email or phone number does, and letting one
+// through would fail only inside the transaction, after the locks are taken and with nothing
+// recorded for the rules to count.
+function isUnstorableText(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) return true;
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(i + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      i += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Optional values may be null, blank or omitted; all are stored as null.
 const text = (max: number) =>
   z
     .string()
     .max(max)
     .nullish()
-    .transform((value) => value?.trim() || null);
+    .transform((value) => value?.trim() || null)
+    .refine((value) => value === null || !isUnstorableText(value));
 
 const bodySchema = z.object({
   type: z.literal("callback.requested"),
