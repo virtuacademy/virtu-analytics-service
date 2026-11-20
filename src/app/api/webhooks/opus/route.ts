@@ -4,7 +4,11 @@ import { prisma } from "@/lib/prisma";
 import { hmacSha256Hex, sha256Hex } from "@/lib/crypto";
 import { timingSafeEqual } from "@/lib/auth";
 import { enqueueDelivery } from "@/lib/qstash";
-import { OPUS_DELIVERY_PLATFORMS, enabledOpusDeliveryPlatforms } from "@/lib/bookingSource";
+import {
+  OPUS_DELIVERY_PLATFORMS,
+  enabledOpusDeliveryPlatforms,
+  isVirtuAcademyUrl,
+} from "@/lib/bookingSource";
 import { ingestIdOrNull } from "@/lib/attribToken";
 import type { Attribution } from "@prisma/client";
 
@@ -122,19 +126,32 @@ function isUniqueViolation(error: unknown): boolean {
   );
 }
 
-function plannedDeliveries(payload: TrialBookedPayload) {
+function plannedDeliveries(payload: TrialBookedPayload, ingest: Attribution | null) {
   // Staff bookings are recorded but never delivered, like staff-booked Acuity appointments.
   if (payload.flags.staffInitiated) return [];
   const enabled = enabledOpusDeliveryPlatforms(process.env.OPUS_DELIVERY_PLATFORMS);
-  return OPUS_DELIVERY_PLATFORMS.map((platform) =>
-    enabled.has(platform)
-      ? { platform, status: "PENDING" as const, responseBody: null }
-      : {
-          platform,
-          status: "SKIPPED" as const,
-          responseBody: `Opus delivery to ${platform} is off (not listed in OPUS_DELIVERY_PLATFORMS)`,
-        },
-  );
+  // Meta receives a booking only when its visit began on a virtu.academy page (the paid-ads
+  // trial page is lessons.virtu.academy), so other Forte customers' contact details stay out of
+  // Virtu.Academy's Meta dataset. Google Ads and HubSpot receive every booking. Only the first
+  // page counts: it is fixed when the ingest row is created, while every later ingest call
+  // rewrites the last one.
+  const cameThroughVirtuAcademy = isVirtuAcademyUrl(ingest?.firstUrl);
+  return OPUS_DELIVERY_PLATFORMS.map((platform) => {
+    const skipped = (responseBody: string) => ({
+      platform,
+      status: "SKIPPED" as const,
+      responseBody,
+    });
+    if (!enabled.has(platform)) {
+      return skipped(`Opus delivery to ${platform} is off (not listed in OPUS_DELIVERY_PLATFORMS)`);
+    }
+    if (platform === "META" && !cameThroughVirtuAcademy) {
+      return skipped(
+        "Opus delivery to META needs a linked virtu.academy visit; this booking has none",
+      );
+    }
+    return { platform, status: "PENDING" as const, responseBody: null };
+  });
 }
 
 // The Opus Attribution row: the visitor's ingest row frozen at booking time, so later page
@@ -183,7 +200,6 @@ function attributionSnapshot(
 async function record(raw: string, payload: TrialBookedPayload) {
   const { eventId, booking, contact, attribution, flags } = payload;
   const occurredAt = new Date(payload.occurredAt);
-  const deliveries = plannedDeliveries(payload);
   // A missing, malformed or unknown token leaves the event's own capture, which Opus froze at
   // booking, as the only source. So does an ingest row last touched after the booking.
   const ingestToken = ingestIdOrNull(attribution.vaAttrib);
@@ -194,6 +210,7 @@ async function record(raw: string, payload: TrialBookedPayload) {
     ingestRow && ingestRow.lastTouchAt.getTime() <= occurredAt.getTime() + INGEST_TOUCH_SLACK_MS
       ? ingestRow
       : null;
+  const deliveries = plannedDeliveries(payload, ingest);
   const snapshot = attributionSnapshot(payload, ingest, occurredAt);
 
   return prisma.$transaction(async (tx) => {

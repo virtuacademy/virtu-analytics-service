@@ -3,13 +3,14 @@ import * as nodeCrypto from "node:crypto";
 import test from "node:test";
 import { loadTsModule } from "./support/load-ts-module.mjs";
 
-// Opus bookings through the real Google Ads adapter and QStash worker, with every
+// Opus bookings through the real Google Ads and Meta adapters and QStash worker, with every
 // network and database boundary stubbed. Contract: docs/opus-trial-webhook.md.
 
 const cryptoLib = loadTsModule(new URL("../src/lib/crypto.ts", import.meta.url), {
   crypto: nodeCrypto,
 });
 const bookingSource = loadTsModule(new URL("../src/lib/bookingSource.ts", import.meta.url), {});
+const normalize = loadTsModule(new URL("../src/lib/normalize.ts", import.meta.url), {});
 
 const googleEnv = {
   GOOGLE_ADS_DEVELOPER_TOKEN: "synthetic-dev-token",
@@ -108,11 +109,86 @@ test("validate-only uploads are flagged so they are never counted as delivered",
   assert.equal(g.uploads[0].validateOnly, true);
 });
 
+function metaCapi(envOverrides = {}) {
+  const events = [];
+  const fetch = async (url, init) => {
+    events.push(JSON.parse(init.body).data[0]);
+    return { ok: true, status: 200, text: async () => JSON.stringify({ events_received: 1 }) };
+  };
+  const { sendMetaCapi } = loadTsModule(
+    new URL("../src/lib/outbound/meta.ts", import.meta.url),
+    { "../normalize": normalize, "../crypto": cryptoLib },
+    {
+      process: {
+        env: { META_PIXEL_ID: "1", META_CAPI_ACCESS_TOKEN: "synthetic", ...envOverrides },
+      },
+      fetch,
+    },
+  );
+  const send = (args = {}) =>
+    sendMetaCapi({
+      eventId: "opus_lesson-1",
+      eventName: "TRIAL_BOOKED",
+      eventTime: new Date("2026-11-04T18:22:05.000Z"),
+      eventSourceUrl: "https://lessons.virtu.academy/trial",
+      email: "parent@example.com",
+      ...args,
+    });
+  return { send, events };
+}
+
+test("Opus events reach Meta under their own opus: name and never fall back", async () => {
+  const mapped = metaCapi({
+    META_CAPI_EVENT_NAMES: "TRIAL_BOOKED=StartTrial,opus:TRIAL_BOOKED=Purchase",
+  });
+  await mapped.send({ source: "opus", value: 24.5, currency: "usd" });
+  await mapped.send({ eventId: "123" });
+  assert.equal(mapped.events[0].event_name, "Purchase");
+  assert.equal(mapped.events[0].event_id, "opus_lesson-1");
+  assert.deepEqual({ ...mapped.events[0].custom_data }, { value: 24.5, currency: "USD" });
+  assert.equal(mapped.events[1].event_name, "StartTrial");
+  // An Acuity event with no entry of its own stays unsent, as before the opus: entry.
+  const canceled = await mapped.send({ eventId: "123", eventName: "TRIAL_CANCELED" });
+  assert.equal(canceled.skipped, true);
+  assert.equal(mapped.events.length, 2);
+
+  // No opus: entry: not Acuity's name, not META_CAPI_EVENT_NAME, not a built-in default.
+  for (const env of [
+    {},
+    { META_CAPI_EVENT_NAMES: "TRIAL_BOOKED=StartTrial" },
+    { META_CAPI_EVENT_NAME: "Lead" },
+  ]) {
+    const unmapped = metaCapi(env);
+    const result = await unmapped.send({ source: "opus" });
+    assert.equal(result.skipped, true);
+    assert.match(result.reason, /opus:TRIAL_BOOKED/);
+    assert.equal(unmapped.events.length, 0);
+  }
+});
+
+test("adding an opus: entry leaves Acuity's Meta event names as they were", async () => {
+  // The built-in names Acuity events get when no name is configured for them.
+  for (const [eventName, expected] of [
+    ["TRIAL_BOOKED", "SubmitApplication"],
+    ["APPOINTMENT_BOOKED", "Schedule"],
+    ["TRIAL_CANCELED", "Cancel"],
+  ]) {
+    for (const env of [{}, { META_CAPI_EVENT_NAMES: "opus:TRIAL_BOOKED=Purchase" }]) {
+      for (const source of [undefined, "acuity"]) {
+        const m = metaCapi(env);
+        await m.send({ eventId: "123", eventName, source });
+        assert.equal(m.events[0].event_name, expected, eventName);
+      }
+    }
+  }
+});
+
 function worker(options = {}) {
   const appointmentId = options.appointmentId ?? "opus_lesson-1";
   const updates = [];
   const googleCalls = [];
   const hubspotCalls = [];
+  const metaCalls = [];
   const sent = { skipped: false, ok: true, status: 200, body: "{}", requestBody: "{}" };
   const prisma = {
     canonicalEvent: {
@@ -148,8 +224,9 @@ function worker(options = {}) {
         sessionId: null,
         ipAddress: "203.0.113.7",
         userAgent: "Synthetic-Agent",
-        lastUrl: "https://app.fortelessons.com/teacher/profile/abc",
+        lastUrl: options.lastUrl ?? "https://app.fortelessons.com/teacher/profile/abc",
         gclid: "G-1",
+        fbc: options.fbc ?? null,
         hubspotutk: options.hubspotutk ?? null,
       }),
     },
@@ -194,7 +271,12 @@ function worker(options = {}) {
           return { ...sent, ...options.hubspot };
         },
       },
-      "@/lib/outbound/meta": { sendMetaCapi: unexpected },
+      "@/lib/outbound/meta": {
+        sendMetaCapi: async (args) => {
+          metaCalls.push(args);
+          return sent;
+        },
+      },
       "@/lib/outbound/tiktok": { sendTikTokEvent: unexpected },
       "@/lib/outbound/openai.mjs": {
         sendOpenAIConversion: unexpected,
@@ -218,7 +300,7 @@ function worker(options = {}) {
       headers: new Headers({ "upstash-signature": "synthetic" }),
     });
   const statusOf = (id) => updates.find((u) => u.where.id === id)?.data;
-  return { invoke, googleCalls, hubspotCalls, otherCalls, statusOf };
+  return { invoke, googleCalls, hubspotCalls, metaCalls, otherCalls, statusOf };
 }
 
 test("an Opus booking reaches Google Ads and HubSpot as an Opus conversion", async () => {
@@ -262,19 +344,70 @@ test("a Google or HubSpot outage or rate limit asks QStash to retry; a rejected 
 });
 
 test("Acuity bookings keep the Acuity source, HubSpot source system and session-only IP", async () => {
-  const w = worker({ appointmentId: "123" });
+  const lastUrl = "https://virtu.academy/schedule?appointmentType=1&fbclid=IwAR-1#pick";
+  const w = worker({
+    appointmentId: "123",
+    extraDeliveries: [{ id: "meta", platform: "META", status: "PENDING" }],
+    lastUrl,
+  });
   await w.invoke();
   assert.equal(w.googleCalls[0].source, "acuity");
   assert.equal(w.googleCalls[0].userIpAddress, null);
   assert.equal(w.hubspotCalls[0].sourceSystem, "attrib.virtu.academy");
+  // Meta is not gated by OPUS_DELIVERY_PLATFORMS for Acuity, resolves Acuity's event name and
+  // gets the page address as stored.
+  assert.equal(w.metaCalls[0].source, "acuity");
+  assert.equal(w.metaCalls[0].eventSourceUrl, lastUrl);
+  assert.equal(w.statusOf("meta").status, "SUCCESS");
 });
 
-test("an Opus event never reaches a platform outside Google Ads and HubSpot", async () => {
-  const w = worker({ extraDeliveries: [{ id: "meta", platform: "META", status: "PENDING" }] });
+test("an Opus booking reaches Meta as an Opus event once META is enabled", async () => {
+  const enabled = {
+    opusPlatforms: "GOOGLE_ADS,HUBSPOT,META",
+    fbc: "fb.1.1730000000000.IwAR-1",
+    lastUrl: "https://lessons.virtu.academy/trial?email=parent%40example.com&fbclid=IwAR-1#faq",
+  };
+  const w = worker({
+    ...enabled,
+    extraDeliveries: [{ id: "meta", platform: "META", status: "PENDING" }],
+  });
+  assert.equal((await w.invoke()).status, 200);
+
+  const [meta] = w.metaCalls;
+  assert.equal(meta.source, "opus");
+  assert.equal(meta.eventId, "opus_lesson-1");
+  assert.equal(meta.eventName, "TRIAL_BOOKED");
+  assert.equal(meta.email, "parent@example.com");
+  assert.equal(meta.fbc, "fb.1.1730000000000.IwAR-1");
+  assert.equal(meta.ip, "203.0.113.7");
+  assert.equal(meta.value, 35);
+  // The page address goes without its query string and fragment.
+  assert.equal(meta.eventSourceUrl, "https://lessons.virtu.academy/trial");
+  assert.equal(w.statusOf("meta").status, "SUCCESS");
+
+  // A row recorded as SKIPPED (no virtu.academy visit, or META off at booking) is never sent.
+  const skipped = worker({
+    ...enabled,
+    extraDeliveries: [{ id: "meta", platform: "META", status: "SKIPPED" }],
+  });
+  await skipped.invoke();
+  assert.equal(skipped.metaCalls.length, 0);
+  assert.equal(skipped.statusOf("meta"), undefined);
+});
+
+test("an Opus event never reaches Meta while it is off, or any platform outside the Opus list", async () => {
+  const w = worker({
+    extraDeliveries: [
+      { id: "meta", platform: "META", status: "PENDING" },
+      { id: "tiktok", platform: "TIKTOK", status: "PENDING" },
+    ],
+  });
   await w.invoke();
-  assert.equal(w.otherCalls.length, 0);
-  assert.equal(w.statusOf("meta").status, "SKIPPED");
-  assert.match(w.statusOf("meta").responseBody, /OPUS_DELIVERY_PLATFORMS/);
+  assert.equal(w.metaCalls.length + w.otherCalls.length, 0);
+  for (const id of ["meta", "tiktok"]) {
+    assert.equal(w.statusOf(id).status, "SKIPPED");
+    assert.match(w.statusOf(id).responseBody, /OPUS_DELIVERY_PLATFORMS/);
+  }
   assert.equal(w.statusOf("google").status, "SUCCESS");
 });
 

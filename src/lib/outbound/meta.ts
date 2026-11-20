@@ -49,6 +49,8 @@ type MetaCapiArgs = {
   value?: number | null;
   currency?: string | null;
   customData?: Record<string, unknown>;
+  // Booking system that produced the event ("acuity" when absent).
+  source?: string | null;
 };
 
 type MetaCapiResult =
@@ -85,9 +87,24 @@ function parseEventNameMap(value?: string | null): Record<string, string> {
   return map;
 }
 
-function resolveMetaEventName(canonicalEventName?: string | null): string | null {
+function isAcuitySource(source: string | null | undefined): boolean {
+  return !source || source === "acuity";
+}
+
+// Acuity events use "EVENT=Name", then META_CAPI_EVENT_NAME, then the defaults below. Any other
+// booking system needs its own "source:EVENT=Name" entry and never falls back, so switching its
+// delivery on cannot send an event under a name nobody chose for it.
+function resolveMetaEventName(
+  canonicalEventName: string | null | undefined,
+  source: string | null | undefined,
+): string | null {
   const mapping = parseEventNameMap(process.env.META_CAPI_EVENT_NAMES);
-  const hasMapping = Object.keys(mapping).length > 0;
+  if (!isAcuitySource(source)) {
+    return canonicalEventName ? (mapping[`${source}:${canonicalEventName}`] ?? null) : null;
+  }
+  // Another system's "source:EVENT" entries say nothing about Acuity's names, so adding one
+  // must not switch off the defaults.
+  const hasMapping = Object.keys(mapping).some((key) => !key.includes(":"));
   if (canonicalEventName && mapping[canonicalEventName]) {
     return mapping[canonicalEventName];
   }
@@ -319,9 +336,14 @@ export async function sendMetaCapi(args: MetaCapiArgs): Promise<MetaCapiResult> 
   }
 
   const { pixelId, accessToken, testEventCode, apiVersion } = authResult.auth;
-  const metaEventName = resolveMetaEventName(args.eventName);
+  const metaEventName = resolveMetaEventName(args.eventName, args.source);
   if (!metaEventName) {
-    return { skipped: true, reason: "Missing META_CAPI_EVENT_NAME(S)" };
+    return {
+      skipped: true,
+      reason: isAcuitySource(args.source)
+        ? "Missing META_CAPI_EVENT_NAME(S)"
+        : `Missing META_CAPI_EVENT_NAMES entry for ${args.source}:${args.eventName ?? "event"}`,
+    };
   }
   const userData = buildUserData(args);
   if (Object.keys(userData).length === 0) {
