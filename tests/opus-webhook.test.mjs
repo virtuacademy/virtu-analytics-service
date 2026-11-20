@@ -489,47 +489,23 @@ test("an ingest row touched more than 10 minutes after the booking is treated as
   }
 });
 
-test("Meta gets an Opus booking only when its visitor came through a virtu.academy page", async () => {
+test("Meta gets an Opus booking whether or not it is linked to a visit", async () => {
   const env = { OPUS_DELIVERY_PLATFORMS: "GOOGLE_ADS,HUBSPOT,META" };
-  const visit = (firstUrl, lastUrl, more = {}) => ({ ...ingestRow, firstUrl, lastUrl, ...more });
   const trialPage = "https://lessons.virtu.academy/trial?fbclid=IwAR-1";
-  for (const [name, row, expected] of [
-    ["the paid-ads trial page", visit(trialPage, "https://lessons.virtu.academy/"), "PENDING"],
-    ["a visit that began there", visit(trialPage, "https://www.fortelessons.com/"), "PENDING"],
-    ["a Forte marketing-site visit", ingestRow, "SKIPPED"],
-    // The last page is rewritten by every ingest call, so it proves nothing.
-    ["only the last page there", visit(ingestRow.firstUrl, trialPage), "SKIPPED"],
-    [
-      "a lookalike host",
-      visit("https://lessons-virtu.academy/trial", "https://virtu.academy.example.com/trial"),
-      "SKIPPED",
-    ],
-    // occurredAt is 18:22:05Z: this row was touched after the booking, so it is not used.
-    [
-      "a visit touched after the booking",
-      visit(trialPage, trialPage, { lastTouchAt: new Date("2026-11-20T09:00:00.000Z") }),
-      "SKIPPED",
-    ],
-    ["no linked visit", null, "SKIPPED"],
+  for (const [name, row] of [
+    ["a visit to the paid-ads trial page", { ...ingestRow, firstUrl: trialPage }],
+    ["a Forte marketing-site visit", ingestRow],
+    // Booked in another browser than the one that clicked the ad: the booker's hashed email
+    // and phone are all Meta has to match on.
+    ["no linked visit", null],
   ]) {
     const w = webhook({ env, ingestRows: row ? { [INGEST_TOKEN]: row } : {} });
     assert.equal((await w.send(payload({ attribution: { vaAttrib: INGEST_TOKEN } }))).status, 200);
     const [deliveries] = w.rows("delivery");
-    const status = Object.fromEntries(Array.from(deliveries, (d) => [d.platform, d.status]));
-    assert.equal(status.META, expected, name);
-    // Google Ads and HubSpot receive every booking either way.
-    assert.equal(status.GOOGLE_ADS, "PENDING", name);
-    assert.equal(status.HUBSPOT, "PENDING", name);
-    if (expected === "SKIPPED") {
-      const meta = deliveries.find((d) => d.platform === "META");
-      assert.match(meta.responseBody, /virtu\.academy visit/, name);
-    }
+    assert.deepEqual(
+      Object.fromEntries(Array.from(deliveries, (d) => [d.platform, d.status])),
+      { GOOGLE_ADS: "PENDING", HUBSPOT: "PENDING", META: "PENDING" },
+      name,
+    );
   }
-
-  // A qualifying visit is still not queued for Meta while META is not listed.
-  const off = webhook({ ingestRows: { [INGEST_TOKEN]: visit(trialPage, trialPage) } });
-  assert.equal((await off.send(payload({ attribution: { vaAttrib: INGEST_TOKEN } }))).status, 200);
-  const offMeta = off.rows("delivery")[0].find((d) => d.platform === "META");
-  assert.equal(offMeta.status, "SKIPPED");
-  assert.match(offMeta.responseBody, /OPUS_DELIVERY_PLATFORMS/);
 });

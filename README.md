@@ -7,7 +7,7 @@ Analytics and conversion tracking service for Virtu. Captures attribution from W
 - Issues first-party visitor/session IDs and attribution tokens
 - Captures UTMs, click IDs, and platform cookies (`_fbp`, `_fbc`, `_ttp`, `hubspotutk`)
 - Processes Acuity "changed" webhooks into canonical events
-- Records Opus trial bookings (signed `trial.booked` webhook) and delivers them to Google Ads and HubSpot, and to Meta for visitors who came through a virtu.academy page; no other platform ([contract](docs/opus-trial-webhook.md))
+- Records Opus trial bookings (signed `trial.booked` webhook) and delivers them to Google Ads, HubSpot and Meta; no other platform ([contract](docs/opus-trial-webhook.md))
 - Sends conversions via QStash to Meta, Google Ads, HubSpot, TikTok, and ChatGPT Ads (OpenAI; disabled until configured)
 - Provides a small dashboard and GraphQL debug endpoint (protected when `AUTH_PASSWORD` is set)
 

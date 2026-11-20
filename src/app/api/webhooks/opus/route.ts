@@ -4,11 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { hmacSha256Hex, sha256Hex } from "@/lib/crypto";
 import { timingSafeEqual } from "@/lib/auth";
 import { enqueueDelivery } from "@/lib/qstash";
-import {
-  OPUS_DELIVERY_PLATFORMS,
-  enabledOpusDeliveryPlatforms,
-  isVirtuAcademyUrl,
-} from "@/lib/bookingSource";
+import { OPUS_DELIVERY_PLATFORMS, enabledOpusDeliveryPlatforms } from "@/lib/bookingSource";
 import { ingestIdOrNull } from "@/lib/attribToken";
 import type { Attribution } from "@prisma/client";
 
@@ -126,32 +122,22 @@ function isUniqueViolation(error: unknown): boolean {
   );
 }
 
-function plannedDeliveries(payload: TrialBookedPayload, ingest: Attribution | null) {
+function plannedDeliveries(payload: TrialBookedPayload) {
   // Staff bookings are recorded but never delivered, like staff-booked Acuity appointments.
   if (payload.flags.staffInitiated) return [];
+  // Every platform that is switched on receives every booking, linked to a visit or not. A
+  // family often books in another browser than the one that clicked the ad, and the booker's
+  // hashed email and phone are then all a platform has to match the booking to that click.
   const enabled = enabledOpusDeliveryPlatforms(process.env.OPUS_DELIVERY_PLATFORMS);
-  // Meta receives a booking only when its visit began on a virtu.academy page (the paid-ads
-  // trial page is lessons.virtu.academy), so other Forte customers' contact details stay out of
-  // Virtu.Academy's Meta dataset. Google Ads and HubSpot receive every booking. Only the first
-  // page counts: it is fixed when the ingest row is created, while every later ingest call
-  // rewrites the last one.
-  const cameThroughVirtuAcademy = isVirtuAcademyUrl(ingest?.firstUrl);
-  return OPUS_DELIVERY_PLATFORMS.map((platform) => {
-    const skipped = (responseBody: string) => ({
-      platform,
-      status: "SKIPPED" as const,
-      responseBody,
-    });
-    if (!enabled.has(platform)) {
-      return skipped(`Opus delivery to ${platform} is off (not listed in OPUS_DELIVERY_PLATFORMS)`);
-    }
-    if (platform === "META" && !cameThroughVirtuAcademy) {
-      return skipped(
-        "Opus delivery to META needs a linked virtu.academy visit; this booking has none",
-      );
-    }
-    return { platform, status: "PENDING" as const, responseBody: null };
-  });
+  return OPUS_DELIVERY_PLATFORMS.map((platform) =>
+    enabled.has(platform)
+      ? { platform, status: "PENDING" as const, responseBody: null }
+      : {
+          platform,
+          status: "SKIPPED" as const,
+          responseBody: `Opus delivery to ${platform} is off (not listed in OPUS_DELIVERY_PLATFORMS)`,
+        },
+  );
 }
 
 // The Opus Attribution row: the visitor's ingest row frozen at booking time, so later page
@@ -210,7 +196,7 @@ async function record(raw: string, payload: TrialBookedPayload) {
     ingestRow && ingestRow.lastTouchAt.getTime() <= occurredAt.getTime() + INGEST_TOUCH_SLACK_MS
       ? ingestRow
       : null;
-  const deliveries = plannedDeliveries(payload, ingest);
+  const deliveries = plannedDeliveries(payload);
   const snapshot = attributionSnapshot(payload, ingest, occurredAt);
 
   return prisma.$transaction(async (tx) => {

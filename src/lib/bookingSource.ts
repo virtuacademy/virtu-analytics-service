@@ -14,17 +14,6 @@ export function bookingSourceFor(appointmentId: string | null | undefined): Book
 export const OPUS_DELIVERY_PLATFORMS = ["GOOGLE_ADS", "HUBSPOT", "META"] as const;
 export type OpusDeliveryPlatform = (typeof OPUS_DELIVERY_PLATFORMS)[number];
 
-/** Whether a page address is on virtu.academy or one of its subdomains. */
-export function isVirtuAcademyUrl(url: string | null | undefined): boolean {
-  if (!url) return false;
-  try {
-    const host = new URL(url).hostname.toLowerCase();
-    return host === "virtu.academy" || host.endsWith(".virtu.academy");
-  } catch {
-    return false;
-  }
-}
-
 /** Whether an Opus booking may be delivered to `platform` under `OPUS_DELIVERY_PLATFORMS`. */
 export function isOpusDeliveryEnabled(platform: string, value: string | null | undefined): boolean {
   return [...enabledOpusDeliveryPlatforms(value)].some((enabled) => enabled === platform);

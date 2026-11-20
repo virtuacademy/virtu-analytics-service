@@ -1,9 +1,8 @@
 # Opus trial bookings → attrib
 
 Opus (app.fortelessons.com) books trial lessons ("Meet & Greets") without Acuity. This contract
-lets Opus report each booking here so Google Ads and HubSpot receive the same kind of
-`TRIAL_BOOKED` conversion that Acuity bookings already produce. Meta receives the bookings of
-visitors who came through a virtu.academy page (see "Delivery").
+lets Opus report each booking here so Google Ads, HubSpot and Meta receive the same kind of
+`TRIAL_BOOKED` conversion that Acuity bookings already produce (see "Delivery").
 
 Owners: this service owns the endpoint and the contract; Opus
 (`server/providers/attrib/` in the Opus repo) is the only sender. Change both sides together and bump
@@ -231,8 +230,6 @@ One transaction writes:
 - `CanonicalEvent` `TRIAL_BOOKED` with `eventTime = occurredAt` and `value = valueCents / 100`.
 - `Delivery` rows for `GOOGLE_ADS`, `HUBSPOT` and `META` only. A platform not listed in
   `OPUS_DELIVERY_PLATFORMS` is written as `SKIPPED`, so Opus deliveries start switched off.
-  The `META` row is also written as `SKIPPED` unless the booking is linked to a visit on
-  virtu.academy (see "Delivery").
 
 ## Delivery
 
@@ -246,19 +243,12 @@ The existing QStash worker sends the deliveries.
   is `SKIPPED`.
 - **Meta:** sends one Conversions API event to the `META_PIXEL_ID` dataset, the one Acuity
   bookings go to.
-  - **Which bookings.** Only a booking linked to a visit that began on virtu.academy:
-    `vaAttrib` names a usable ingest row whose first page is on virtu.academy or a subdomain
-    (the paid-ads trial page is lessons.virtu.academy). Any other booking's `META` row is
-    written as `SKIPPED`. The aim is to keep Forte customers who never visited a
-    Virtu.Academy page out of Virtu.Academy's Meta dataset. It is a filter, not proof of a
-    visit:
-    - A visitor who lands on the page in one browser and books in another is not linked, so
-      that booking is not sent. Neither is one who clicks through before the page's links
-      carry the token.
-    - The link is the token on the page's links into the app. Someone who opens such a link
-      forwarded by another person books under that person's visit, and is sent with it.
-    - The first page is the address the caller reported to ingest. Ingest is a public
-      endpoint and cannot prove a request came from that page.
+  - **Which bookings.** Every reported booking, as for Google Ads and HubSpot, whether or not
+    `vaAttrib` links it to a visit. A family often books in another browser than the one that
+    clicked the ad (Meta ads open in Instagram's and Facebook's built-in browsers), and the
+    booker's hashed email and phone are then all Meta has to match the booking to that click.
+    So a booking that has nothing to do with a Virtu.Academy page, for example a Forte
+    teacher's own student, also reaches Virtu.Academy's Meta dataset.
   - **Event name.** The one mapped as `opus:TRIAL_BOOKED` in `META_CAPI_EVENT_NAMES`, for
     example `TRIAL_BOOKED=<Acuity's name>,opus:TRIAL_BOOKED=Purchase`. Opus events never fall
     back to Acuity's name, `META_CAPI_EVENT_NAME` or a built-in default; without the entry the
@@ -271,7 +261,8 @@ The existing QStash worker sends the deliveries.
     no value (`valueCents` is `null`).
   - **What is sent.** `event_id` = `eventId`, `event_time` = `occurredAt`, `action_source` =
     `website`, `event_source_url` = the visit's last page address without its query string or
-    fragment, `value` and `currency`, the SHA-256 hashes of the booker's email, phone and first
+    fragment (without a linked visit: the landing page Opus captured, or `https://virtu.academy`
+    when it captured none), `value` and `currency`, the SHA-256 hashes of the booker's email, phone and first
     and last name, an IP address and user agent (see "IP address" below), the snapshot's `fbc`
     and `fbp`, and the hash of `eventId` as `external_id`. Custom data: `appointment_id`
     (the `eventId`), `appointment_type_id` (`null` for Opus) and the visit's `utm_source`,

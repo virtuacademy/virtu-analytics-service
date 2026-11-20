@@ -385,7 +385,7 @@ test("an Opus booking reaches Meta as an Opus event once META is enabled", async
   assert.equal(meta.eventSourceUrl, "https://lessons.virtu.academy/trial");
   assert.equal(w.statusOf("meta").status, "SUCCESS");
 
-  // A row recorded as SKIPPED (no virtu.academy visit, or META off at booking) is never sent.
+  // A row recorded as SKIPPED (META off at booking) is never sent.
   const skipped = worker({
     ...enabled,
     extraDeliveries: [{ id: "meta", platform: "META", status: "SKIPPED" }],
