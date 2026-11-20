@@ -51,8 +51,9 @@ event will be delivered.
 
 Nothing here can prove a person sent the request. Anyone can call the endpoint, a script can
 send any `Origin` header, and anyone can get a visit token by loading the page. So the rules do
-not try to tell people from scripts. They bound how many events can reach an ad platform, and
-they leave a record of every event that was refused.
+not try to tell people from scripts. They limit what one visit and one address can have
+delivered, leave a record of every event that was refused, and raise an alarm when the day's
+volume looks wrong.
 
 An event is **recorded but delivered nowhere** (every delivery `SKIPPED` with the reason) when:
 
@@ -62,19 +63,29 @@ An event is **recorded but delivered nowhere** (every delivery `SKIPPED` with th
   stops working.
 - **Nothing to match.** The visit has no ad click ID and the event carries neither an email nor
   a phone number.
-- **Limit per IP address.** `PAGE_EVENT_DAILY_LIMIT_PER_IP` (default 3) events from the
-  caller's address were already accepted for delivery in the last 24 hours. The address is
-  taken as ingest takes it (first `X-Forwarded-For` entry, else `X-Real-IP`), so it is only as
-  trustworthy as the proxy in front of this service. Requests with no address share one
-  allowance.
-- **Limit for everyone.** `PAGE_EVENT_DAILY_LIMIT` (default 25) page events were already
-  accepted for delivery in the last 24 hours, whoever sent them. Real volume is a handful a
-  week. `0` delivers nothing.
+- **Limit per address.** `PAGE_EVENT_DAILY_LIMIT_PER_IP` (default 3) events from the caller's
+  address were already accepted for delivery in the last 24 hours. An IPv4 address counts by
+  itself and an IPv6 address by its /64 network, since one IPv6 connection usually holds a whole
+  /64 and could otherwise rotate through it. The address is taken as ingest takes it (first
+  `X-Forwarded-For` entry, else `X-Real-IP`), so it is only as trustworthy as the proxy in front
+  of this service. Requests with no address share one allowance.
 
-When a limit refuses an event, an error line is logged for monitoring to find:
-`[page-events] limit reached (PAGE_EVENT_DAILY_LIMIT): event recorded, not delivered` (or
-`PAGE_EVENT_DAILY_LIMIT_PER_IP`). It means either abuse or real volume that has outgrown the
+Each of these is about the visit or the address that sent the event. **Nothing other visitors
+do can refuse an event:** there is no limit shared by everyone, because a shared limit would
+let a few forged requests a day stop every real callback, and a skipped delivery is never sent
+later.
+
+**The alarm.** When more than `PAGE_EVENT_DAILY_ALERT_THRESHOLD` (default 25) page events,
+refused ones included, were recorded in the last 24 hours, every further one logs an error line
+for monitoring to find, and is still delivered:
+`[page-events] 26 page events in 24 hours, over PAGE_EVENT_DAILY_ALERT_THRESHOLD (25). Still
+delivering. If this is a flood, remove the platforms from PAGE_DELIVERY_PLATFORMS.` Real volume
+is a handful a week, so the line means either abuse or real volume that has outgrown the
 setting.
+
+**The brake.** To stop a flood, take the platforms out of `PAGE_DELIVERY_PLATFORMS` (empty
+records events without delivering them). Events recorded while it is off are never delivered
+later.
 
 A request is **refused outright** (nothing written) when its token names no recorded visit
 (tokens of other events, `opus_…` and `page_…`, are not UUIDs), its body is outside the
@@ -84,9 +95,10 @@ honest browsers on other sites out.
 Page events are checked and recorded one at a time (a database lock held for the transaction),
 so two requests at the same moment cannot both slip under a limit.
 
-**What remains possible.** A script with many IP addresses can still get up to the daily limit
-for everyone delivered per day, each carrying whatever email it typed, which then goes to the
-ad platforms hashed. Google Ads counts such an event only if it matches one of the account's ad
+**What remains possible.** A script with many networks can forge callbacks, three a day from
+each address, until someone switches page delivery off; the alarm line is how that gets
+noticed. Each forged event carries whatever email the script typed, which goes to the ad
+platforms hashed. Google Ads counts such an event only if it matches one of the account's ad
 clicks. Every request that passes validation writes rows, refused events included, and there is
 no limit on that.
 
@@ -131,9 +143,9 @@ The QStash worker sends the deliveries, as for bookings (see
 | Variable | Purpose |
 | --- | --- |
 | `ALLOWED_ORIGINS` | Must list the page's origin (`https://lessons.virtu.academy`). |
-| `PAGE_DELIVERY_PLATFORMS` | Comma list of `GOOGLE_ADS`, `META`. Empty means record only. |
-| `PAGE_EVENT_DAILY_LIMIT` | Page events delivered per 24 hours, all visitors together. Default 25; `0` delivers none. |
-| `PAGE_EVENT_DAILY_LIMIT_PER_IP` | Page events delivered per 24 hours from one IP address. Default 3. |
+| `PAGE_DELIVERY_PLATFORMS` | Comma list of `GOOGLE_ADS`, `META`. Empty means record only; this is also how to stop a flood. |
+| `PAGE_EVENT_DAILY_LIMIT_PER_IP` | Page events delivered per 24 hours from one IPv4 address or IPv6 /64 network. Default 3; `0` delivers none. |
+| `PAGE_EVENT_DAILY_ALERT_THRESHOLD` | Page events per 24 hours, from everyone, beyond which each one logs an error line. It never stops delivery. Default 25. |
 | `GOOGLE_ADS_CONVERSION_ACTIONS` | Add `page:CALLBACK_REQUESTED=<action id>`. |
 | `META_CAPI_EVENT_NAMES` | Add `page:CALLBACK_REQUESTED=<Meta event name>`. |
 | `EVENT_VALUES` | Optional `page:CALLBACK_REQUESTED=<USD amount>`. Without it no value is sent. |

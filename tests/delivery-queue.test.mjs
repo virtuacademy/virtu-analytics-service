@@ -136,7 +136,7 @@ test("an Acuity booking made minutes after the ad click holds only its Google Ad
   }
   assert.deepEqual(fresh.queued, ["ce_1"]);
 
-  // A visitor who came back days after the click is not kept waiting.
+  // A visit last seen more than six and a quarter hours ago is not kept waiting.
   const returning = await acuityBooking({ lastTouchAt: inMinutes(-400) });
   assert.equal(notBeforeOf(returning, "GOOGLE_ADS"), null);
 

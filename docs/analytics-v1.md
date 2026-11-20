@@ -73,7 +73,7 @@ Why this matters:
 
 Public (CORS-protected):
 - `POST /api/attrib/ingest` (also supports `OPTIONS` preflight). Optional body fields `vid`, `sid` and `attribTok` let a site that never receives this service's cookies (www.fortelessons.com) send back the IDs from an earlier response; each is used only when its cookie is missing and only if UUID-shaped, otherwise a fresh ID is issued. A `va_attrib` cookie that is not a UUID is also replaced. See [the ingest contract](opus-trial-webhook.md#ingest-contract-for-the-marketing-site).
-- `POST /api/attrib/event` (also supports `OPTIONS` preflight). A page reports a callback request for a visit it holds the token of. Nothing can prove a person sent it, so what it can deliver is bounded: one per visit, a few per IP address and `PAGE_EVENT_DAILY_LIMIT` in all per 24 hours, and only for a visit seen in the last 24 hours. See [page-events.md](page-events.md).
+- `POST /api/attrib/event` (also supports `OPTIONS` preflight). A page reports a callback request for a visit it holds the token of. Nothing can prove a person sent it, so what one caller can have delivered is limited: one per visit and a few per address per 24 hours, and only for a visit seen in the last 24 hours. An unusual number of events in a day logs an error and is still delivered; `PAGE_DELIVERY_PLATFORMS` is the switch that stops a flood. See [page-events.md](page-events.md).
 
 Internal (signed):
 - `POST /api/webhooks/acuity` - verifies signature, fetches appointment, creates canonical events, queues deliveries.
@@ -108,7 +108,7 @@ See `.env.example` for the full list. Key values:
 - Meta: `META_PIXEL_ID`, `META_CAPI_ACCESS_TOKEN`, `META_CAPI_EVENT_NAME(S)`, optional `META_CAPI_TEST_EVENT_CODE`, `META_CAPI_API_VERSION`, `META_CAPI_LDU_ENABLED`, `META_CAPI_PREDICTED_LTV`, `META_CAPI_TEST_SECRET`
 - HubSpot: `HUBSPOT_PRIVATE_APP_TOKEN`, `HUBSPOT_EVENT_NAMES`, optional `HUBSPOT_SOURCE_SYSTEM`
 - Opus: `OPUS_WEBHOOK_SECRET`, `OPUS_DELIVERY_PLATFORMS`
-- Page events: `PAGE_DELIVERY_PLATFORMS`, `PAGE_EVENT_DAILY_LIMIT` (default 25), `PAGE_EVENT_DAILY_LIMIT_PER_IP` (default 3)
+- Page events: `PAGE_DELIVERY_PLATFORMS`, `PAGE_EVENT_DAILY_LIMIT_PER_IP` (default 3), `PAGE_EVENT_DAILY_ALERT_THRESHOLD` (default 25; an alarm, not a limit)
 - Accounts and page events: `EVENT_VALUES` (optional USD values, `source:EVENT=amount`)
 - Google Ads hold: `GOOGLE_ADS_HOLD_MINUTES` (default 375; `0` is off)
 - Google Ads: `GOOGLE_ADS_DEVELOPER_TOKEN`, OAuth creds, `GOOGLE_ADS_CUSTOMER_ID`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID`, `GOOGLE_ADS_CONVERSION_ACTION_ID(S)`, `GOOGLE_ADS_CONVERSION_ACTIONS` (per-event mapping), `GOOGLE_ADS_DEFAULT_PHONE_COUNTRY_CODE`, `GOOGLE_ADS_CONVERSION_TIMEZONE(_OFFSET)`, `GOOGLE_ADS_AD_USER_DATA_CONSENT`, `GOOGLE_ADS_AD_PERSONALIZATION_CONSENT` (currently ignored by code), optional `GOOGLE_ADS_VALIDATE_ONLY`/`GOOGLE_ADS_JOB_ID`
